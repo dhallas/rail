@@ -6,6 +6,69 @@ All notable changes to Rail are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-27
+
+Bulk selection, snooze, attachments and saved searches, contributed by @armangurkan (#100, #101,
+#102, #103; proposals #81 and #98).
+
+### Added
+
+- **Bulk selection.** `* a` selects every thread the mailbox and filter match (up to 10,000),
+  `* f` every thread from the sender of the thread under the cursor, `v` a range, and `J`/`K` or
+  Shift-↓/Shift-↑ extend the selection one thread at a time. Archive, trash, star, read, labels
+  and move act on large sets in chunks of 200 threads per account, and `z` undoes the whole set.
+  Over 50 threads `e`, `s` and `u` ask first (`[general] bulk_confirm`, `0` never asks); trash
+  always asks.
+- **Snooze.** `h` archives the thread, the selection or the open thread now and puts it back in
+  the inbox, unread, at a chosen or typed time (`6pm`, `tomorrow 9am`, `3 days`, `next fri`), or
+  earlier when new mail arrives in it. A Snoozed mailbox lists what is waiting; "Return to inbox
+  now" brings a thread back early. Rail keeps the times itself, since neither Gmail nor
+  Microsoft 365 offers a snooze, and returns threads while the daemon runs.
+- **Attachments.** `a` in the reader lists a thread's attachments. `s`, `S` and `w` save them to
+  `[general] attachment_dir` (your download directory by default) as owner-only files that never
+  replace an existing file. `Enter` or `o` opens common document and image types with the
+  system's program after a once-a-session question; anything else is saved instead.
+- **Saved searches.** `S` (or `:save-search`) keeps the filter in force under a name in
+  `[[saved_searches]]` in `config.toml`. Each search is a sidebar row under SEARCHES with an
+  unread count (`:search-counts` / `saved_search_counts` turns counts off), listing every folder
+  of every account narrowed by its filter. `r` and `d` rename and remove it.
+
+### Changed
+
+- The reader's headers key moved from `h` to `H`; `h` is snooze. A `[keys]` entry binding
+  `reader.headers` to `h` now stops Rail at startup with a clash error until you change it.
+- The new default keys `J`, `K`, `shift-down` and `shift-up` count towards clashes: a `[keys]`
+  entry binding one of them to another list action stops startup until you change it.
+
+### Security
+
+- Rail opens an attachment only when its bytes match the type it declares, and refuses text
+  that contains markup a system opener could sniff as HTML or SVG; such an attachment is saved
+  instead (#107).
+- The open question warns that Office documents and RTF can hold macros or links that run or
+  fetch content.
+- An opened attachment's copy lives in a private folder of Rail's cache and is removed a minute
+  after the reader closes, when Rail quits, or by a daily sweep (#108).
+
+### Fixed
+
+Found in review before release and fixed on the contributor's branches:
+
+- A late `* a` or `* f` answer is no longer applied after you switched mailbox or filter (#104).
+- `* f` no longer selects by your own address when you sent the last reply (#105).
+- A snoozed thread whose return to the inbox is refused is no longer lost: the failure stays in
+  `:errors` and `Enter` sends it again, without bringing back mail you trashed meanwhile (#106).
+- Renaming a saved search keeps a query you edited in `config.toml` while Rail was open (#109).
+- A saved search with an empty query, or one that narrows nothing, lists nothing instead of
+  every thread, and is refused when saved (#110).
+
+### Upgrading
+
+- This version adds a database migration (snoozes). An older Rail refuses the upgraded store,
+  so going back to 0.2.x is not supported.
+- An older Rail also refuses a `config.toml` that contains `[[saved_searches]]`,
+  `saved_search_counts`, `bulk_confirm` or `attachment_dir`; remove them before going back.
+
 ## [0.2.4] - 2026-10-25
 
 ### Added
