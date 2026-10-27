@@ -28,6 +28,8 @@ mod m365;
 mod modal_tests;
 mod palette;
 mod reading;
+mod saved;
+mod search_counts_toggle;
 mod selection;
 mod sidebar;
 #[cfg(test)]
@@ -54,6 +56,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crossterm::event::KeyEvent;
+use rail_core::config::SavedSearch;
 use rail_core::config::{AccountKind, Config, DimRead, Icons, ThreadOrder};
 use rail_core::ops::OpError;
 use rail_core::paths::Paths;
@@ -131,6 +134,10 @@ pub struct MailContext {
     /// `[general] attachment_dir` and the user's download directory. `None` means neither
     /// answered, and the three keys say so instead of sending anything.
     pub attachment_dir: Option<PathBuf>,
+    /// `[[saved_searches]]` in config order; the ops answer a whole new list.
+    pub saved_searches: Vec<SavedSearch>,
+    /// `general.saved_search_counts`: the unread count beside each saved search.
+    pub saved_search_counts: bool,
 }
 
 /// One configured account, in `config.toml`'s order.
@@ -240,6 +247,10 @@ pub struct MailScreen {
     hints: bool,
     /// The header's clock is shown: from the config, then whatever `:clock` chose this session.
     show_clock: bool,
+    /// The saved searches, from the config and then from every `SavedSearchesChanged`.
+    saved: Vec<SavedSearch>,
+    /// Saved-search counts are shown: from the config, then whatever `:search-counts` chose.
+    search_counts: bool,
     /// The HTML files `o` wrote this session, removed when the reader closes and on drop.
     open_files: OpenFiles,
     /// The browser confirmation was answered yes this session.
@@ -287,6 +298,8 @@ impl MailScreen {
         let themes = themes::ThemeState::new(ctx.theme_choice);
         let hints = ctx.hints;
         let show_clock = ctx.show_clock;
+        let saved = ctx.saved_searches.clone();
+        let search_counts = ctx.saved_search_counts;
         Self {
             ctx,
             account_ids: vec![None; accounts.len()],
@@ -315,6 +328,8 @@ impl MailScreen {
             themes,
             hints,
             show_clock,
+            saved,
+            search_counts,
             open_files,
             html_confirmed: false,
             attachment: attachments::AttachmentState::default(),
@@ -371,6 +386,8 @@ impl MailScreen {
             addresses: self.accounts.iter().map(|a| a.address.clone()).collect(),
             names: self.accounts.iter().map(|a| a.name.clone()).collect(),
             filter: self.filter.clone(),
+            saved: self.saved_filter(),
+            saved_all: self.saved_filters(),
             at,
             utc_offset: self.ctx.clock.utc_offset(),
         }
@@ -392,6 +409,28 @@ impl MailScreen {
         self.request(seq, PageAt::First)
     }
 
+    /// The open scope's saved filter, re-derived on every read and never cached (FR-10). The
+    /// scope's position is trusted only while it still carries the scope's name; otherwise the
+    /// search is found by that name, and `None` once it is gone — which `list_query` reads as
+    /// "no rows", never as "every thread".
+    fn saved_filter(&self) -> Option<Filter> {
+        match &self.scope {
+            ScopeChoice::Saved { index, name } => {
+                self.saved_entry(*index, name).map(|s| parse(&s.query))
+            }
+            _ => None,
+        }
+    }
+
+    /// Every saved search's filter, in config order; empty while the counts are off (FR-19).
+    fn saved_filters(&self) -> Vec<Filter> {
+        if self.search_counts {
+            self.saved.iter().map(|s| parse(&s.query)).collect()
+        } else {
+            Vec::new()
+        }
+    }
+
     fn read_list(&mut self, at: PageAt, place: Place) -> Effect {
         self.navigating = matches!(at, PageAt::First | PageAt::Last).then_some((at, place));
         let request = self.list_request(at, place);
@@ -402,12 +441,22 @@ impl MailScreen {
         let seq = self.next_seq();
         self.latest_sidebar = seq;
         let addresses = self.accounts.iter().map(|a| a.address.clone()).collect();
-        self.ctx.store.sidebar(seq, addresses)
+        let names = self.accounts.iter().map(|a| a.name.clone()).collect();
+        self.ctx.store.sidebar(
+            seq,
+            addresses,
+            names,
+            self.saved_filters(),
+            self.ctx.clock.utc_offset(),
+        )
     }
 
     /// Show `scope`. The old rows stay drawn until the new ones arrive (spec §3); a page
-    /// read of the old scope still in flight is dropped by its sequence number.
+    /// read of the old scope still in flight is dropped by its sequence number. A `Saved`
+    /// scope is re-keyed by name first, so every way of opening one — a sidebar row, a
+    /// palette entry, FR-17's re-find — lands on the search it named or on All inboxes.
     fn set_scope(&mut self, scope: ScopeChoice) -> Vec<Effect> {
+        let scope = self.resolve_saved_scope(scope);
         self.sidebar.point_at(&scope);
         self.scope = scope;
         self.list.cancel_loading();
@@ -469,6 +518,9 @@ impl MailScreen {
             Action::ListFilter if self.focus == Focus::List => {
                 self.modal = Some(Modal::Filter(FilterLine::new(&self.filter_text)));
                 return Vec::new();
+            }
+            Action::ListSaveSearch if self.focus == Focus::List => {
+                return self.save_search_prompt();
             }
             _ => {}
         }
@@ -576,6 +628,8 @@ impl MailScreen {
             Action::SidebarPageDown => self.sidebar.page_down(),
             Action::SidebarPageUp => self.sidebar.page_up(),
             Action::SidebarFold => self.sidebar.toggle_fold(),
+            Action::SidebarRenameSearch => return self.rename_cursor_search(),
+            Action::SidebarRemoveSearch => return self.remove_cursor_search(),
             Action::SidebarOpen => {
                 if let Some(scope) = self.sidebar.open() {
                     self.focus = Focus::List;

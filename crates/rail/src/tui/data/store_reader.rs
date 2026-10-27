@@ -56,6 +56,12 @@ pub enum ScopeChoice {
         name: String,
         kind: FolderKind,
     },
+    /// A saved search: every folder of every account narrowed by its filter. `index` is its
+    /// position in `config.toml`, which is its identity; `name` labels the header.
+    Saved {
+        index: usize,
+        name: String,
+    },
 }
 
 impl PartialEq for ScopeChoice {
@@ -67,7 +73,10 @@ impl PartialEq for ScopeChoice {
             | (Self::Sent, Self::Sent)
             | (Self::Trash, Self::Trash)
             | (Self::Drafts, Self::Drafts) => true,
-            (Self::Account(a), Self::Account(b)) => a == b,
+            // One arm: an account and a saved search are both identified by their position in
+            // the config, and both compare it the same way.
+            (Self::Account(a), Self::Account(b))
+            | (Self::Saved { index: a, .. }, Self::Saved { index: b, .. }) => a == b,
             (
                 Self::Folder {
                     account: a,
@@ -95,7 +104,7 @@ impl ScopeChoice {
             Self::Drafts => Some("Drafts"),
             Self::Sent => Some("Sent"),
             Self::Trash => Some("Trash"),
-            Self::Account(_) | Self::Folder { .. } => None,
+            Self::Account(_) | Self::Folder { .. } | Self::Saved { .. } => None,
         }
     }
 
@@ -113,7 +122,7 @@ impl ScopeChoice {
                 kind,
                 FolderKind::Sent | FolderKind::Trash | FolderKind::Drafts
             ),
-            Self::Unified | Self::Starred | Self::Account(_) => true,
+            Self::Unified | Self::Starred | Self::Account(_) | Self::Saved { .. } => true,
         }
     }
 }
@@ -127,6 +136,10 @@ pub struct ListRequest {
     pub addresses: Vec<String>,
     pub names: Vec<String>,
     pub filter: Filter,
+    /// The open saved search's own filter, `ANDed` under the live one.
+    pub saved: Option<Filter>,
+    /// Every saved search's filter, parsed, in config order: the sidebar's counts.
+    pub saved_all: Vec<Filter>,
     pub at: PageAt,
     pub utc_offset: i32,
 }
@@ -283,10 +296,22 @@ impl StoreReader {
         })
     }
 
-    pub fn sidebar(&self, seq: u64, addresses: Vec<String>) -> Effect {
+    /// The counts: each account's, and one per saved filter in `saved` (empty while the
+    /// saved-search counts are off, so no count query runs). `names` resolves each saved
+    /// query's own `account:`, as a list read does.
+    pub fn sidebar(
+        &self,
+        seq: u64,
+        addresses: Vec<String>,
+        names: Vec<String>,
+        saved: Vec<Filter>,
+        utc_offset: i32,
+    ) -> Effect {
         let reader = self.clone();
         job(move |sink| async move {
-            let result = reader.read(move |store| sidebar(store, &addresses)).await;
+            let result = reader
+                .read(move |store| sidebar(store, &addresses, &names, &saved, utc_offset))
+                .await;
             send(&sink, MailEvent::Sidebar { seq, result });
         })
     }
@@ -304,9 +329,12 @@ impl StoreReader {
         Self::newest(&self.latest_list, list.seq);
         let reader = self.clone();
         refresh_job(end, move |sink| async move {
-            let addresses = list.addresses.clone();
+            let (addresses, names) = (list.addresses.clone(), list.names.clone());
+            let (saved, utc_offset) = (list.saved_all.clone(), list.utc_offset);
             send(&sink, reader.read_list(list).await);
-            let result = reader.read(move |store| sidebar(store, &addresses)).await;
+            let result = reader
+                .read(move |store| sidebar(store, &addresses, &names, &saved, utc_offset))
+                .await;
             send(
                 &sink,
                 MailEvent::Sidebar {
@@ -472,11 +500,28 @@ fn open(db: &std::path::Path) -> Result<Store, ReadError> {
     }
 }
 
-/// Each configured account's store id and the sidebar's counts.
-fn sidebar(store: &Store, addresses: &[String]) -> Result<SidebarOutcome, StoreError> {
+/// Each configured account's store id and the sidebar's counts, including one unread count
+/// per filter in `saved` (in config order). Each saved query's own `account:` is resolved
+/// through `names`, as a list read resolves the live one, so a saved `account:home` search is
+/// counted the way it is listed; with `saved` empty no count query runs (FR-19).
+fn sidebar(
+    store: &Store,
+    addresses: &[String],
+    names: &[String],
+    saved: &[Filter],
+    utc_offset: i32,
+) -> Result<SidebarOutcome, StoreError> {
     let account_ids = store.account_ids(addresses)?;
     let known: Vec<i64> = account_ids.iter().flatten().copied().collect();
-    let counts = store.sidebar_counts(&known)?;
+    let id_of = |index: usize| account_ids.get(index).copied().flatten();
+    let filters: Vec<(Filter, AccountFilter)> = saved
+        .iter()
+        .map(|filter| {
+            let account = account_filter(names, None, filter.account.as_deref(), id_of);
+            (filter.clone(), account)
+        })
+        .collect();
+    let counts = store.sidebar_counts(&known, &filters, utc_offset)?;
     Ok(SidebarOutcome {
         counts,
         account_ids,
@@ -508,28 +553,74 @@ fn store_scope(scope: &ScopeChoice, account_ids: &[Option<i64>]) -> Option<Scope
             account_id,
             folder_id: *folder_id,
         }),
+        // A saved search is every folder of every account, narrowed by its own filter.
+        ScopeChoice::Saved { .. } => Some(Scope::All { accounts: all() }),
     }
 }
 
-/// The `ListQuery` `request` asks for, its scope and `account:` resolved against
-/// `account_ids` — `Store::account_ids` for `request.addresses`, which the caller has looked
-/// up already, so one list refresh costs one lookup; `None` when the scope's account has no
-/// row in the store yet (nothing synced). The one place a `ListQuery` is built, so the list
-/// and a select-all can never disagree on what matches.
-fn list_query(request: &ListRequest, account_ids: &[Option<i64>]) -> Option<ListQuery> {
-    let id_of = |index: usize| account_ids.get(index).copied().flatten();
-    let account = match &request.filter.account {
+/// `name`'s store id, or `Nobody` when no configured account has that name (ignoring ASCII
+/// case). `None` narrows nothing.
+fn only(
+    names: &[String],
+    name: Option<&str>,
+    id_of: &impl Fn(usize) -> Option<i64>,
+) -> AccountFilter {
+    match name {
         None => AccountFilter::Any,
-        Some(name) => request
-            .names
+        Some(name) => names
             .iter()
             .position(|n| n.eq_ignore_ascii_case(name))
             .and_then(id_of)
             .map_or(AccountFilter::Nobody, AccountFilter::Only),
-    };
-    store_scope(&request.scope, account_ids).map(|scope| ListQuery {
+    }
+}
+
+/// FR-13: the live filter's `account:` and the open saved search's, resolved through the same
+/// `names` lookup and **intersected**. `Filter::message_sql` emits no account condition and
+/// `ListQuery.account` is one `AccountFilter`, so the two must meet here: neither set is
+/// `Any`, one set is its `Only(id)` (or `Nobody` for an unknown name), both set and equal is
+/// that id, both set and different is `Nobody`. Any `Nobody` wins.
+fn account_filter(
+    names: &[String],
+    live: Option<&str>,
+    saved: Option<&str>,
+    id_of: impl Fn(usize) -> Option<i64>,
+) -> AccountFilter {
+    match (only(names, live, &id_of), only(names, saved, &id_of)) {
+        (AccountFilter::Nobody, _) | (_, AccountFilter::Nobody) => AccountFilter::Nobody,
+        (AccountFilter::Any, other) | (other, AccountFilter::Any) => other,
+        (AccountFilter::Only(a), AccountFilter::Only(b)) if a == b => AccountFilter::Only(a),
+        (AccountFilter::Only(_), AccountFilter::Only(_)) => AccountFilter::Nobody,
+    }
+}
+
+/// The one query a list read runs, scope and both `account:` terms resolved to store ids;
+/// `None` when the scope's account has no row in the store yet. Everything a thread read
+/// narrows by is built **here**, so anything else reading the same rows (a select-all over
+/// what the list shows) inherits the saved filter instead of quietly dropping it.
+fn list_query(request: &ListRequest, account_ids: &[Option<i64>]) -> Option<ListQuery> {
+    // Fail closed. A `Saved` scope with no filter no longer names a saved search — the screen
+    // could not find it — and `store_scope` would still widen it to every folder of every
+    // account, with nothing left to narrow it: the whole mailbox under that search's title.
+    // One guard here, so the list and a select-all both read nothing. A saved filter with no
+    // condition (an empty query, or only words the full-text query drops) narrows nothing
+    // either, so it fails closed the same way (#110).
+    let narrows = request.saved.as_ref().is_some_and(Filter::has_condition);
+    if matches!(request.scope, ScopeChoice::Saved { .. }) && !narrows {
+        return None;
+    }
+    let id_of = |index: usize| account_ids.get(index).copied().flatten();
+    let scope = store_scope(&request.scope, account_ids)?;
+    let account = account_filter(
+        &request.names,
+        request.filter.account.as_deref(),
+        request.saved.as_ref().and_then(|f| f.account.as_deref()),
+        id_of,
+    );
+    Some(ListQuery {
         scope,
         filter: request.filter.clone(),
+        saved: request.saved.clone(),
         account,
         utc_offset: request.utc_offset,
     })
@@ -562,5 +653,143 @@ fn matching(
     match list_query(request, &account_ids) {
         Some(query) => store.matching_targets(&query, limit),
         None => Ok(Vec::new()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rail_core::store::filter::parse;
+
+    use super::*;
+
+    fn names() -> Vec<String> {
+        vec!["work".to_string(), "home".to_string()]
+    }
+
+    /// Index 0 is store id 1, index 1 is store id 2.
+    fn id_of(index: usize) -> Option<i64> {
+        [Some(1), Some(2)].get(index).copied().flatten()
+    }
+
+    /// AC-13c (FR-13): the live `account:` and the saved one are resolved through the same
+    /// name list and **intersected**; any unknown name is `Nobody`, and so is a disagreement.
+    #[test]
+    fn the_saved_and_live_account_filters_intersect() {
+        let names = names();
+        let filter =
+            |live: Option<&str>, saved: Option<&str>| account_filter(&names, live, saved, id_of);
+        assert_eq!(filter(None, None), AccountFilter::Any, "neither narrows");
+        assert_eq!(filter(None, Some("home")), AccountFilter::Only(2));
+        assert_eq!(filter(Some("home"), None), AccountFilter::Only(2));
+        assert_eq!(
+            filter(Some("HOME"), Some("home")),
+            AccountFilter::Only(2),
+            "names are compared ignoring case"
+        );
+        assert_eq!(
+            filter(Some("home"), Some("work")),
+            AccountFilter::Nobody,
+            "two different accounts intersect to none"
+        );
+        assert_eq!(filter(Some("nope"), None), AccountFilter::Nobody);
+        assert_eq!(filter(None, Some("nope")), AccountFilter::Nobody);
+        assert_eq!(filter(Some("nope"), Some("home")), AccountFilter::Nobody);
+    }
+
+    /// Step 7 (FR-10): a saved search reads every folder of every account that has a store
+    /// row, and the saved filter travels in the one `ListQuery` the builder makes.
+    #[test]
+    fn a_saved_search_scope_is_every_folder_of_every_account() {
+        let ids = [Some(1), None, Some(3)];
+        let scope = ScopeChoice::Saved {
+            index: 0,
+            name: "dana".into(),
+        };
+        assert_eq!(
+            store_scope(&scope, &ids),
+            Some(Scope::All {
+                accounts: vec![1, 3]
+            })
+        );
+    }
+
+    /// FR-10: `ListRequest.saved` becomes `ListQuery.saved`, and the live filter stays its own.
+    #[test]
+    fn the_saved_filter_reaches_the_query() {
+        let request = ListRequest {
+            seq: 1,
+            scope: ScopeChoice::Saved {
+                index: 0,
+                name: "dana".into(),
+            },
+            addresses: vec!["w@example.com".into()],
+            names: names(),
+            filter: parse("is:unread"),
+            saved: Some(parse("from:dana")),
+            saved_all: vec![parse("from:dana")],
+            at: PageAt::First,
+            utc_offset: 0,
+        };
+        let query = list_query(&request, &[Some(1)]).expect("the account has a store row");
+        assert_eq!(query.scope, Scope::All { accounts: vec![1] });
+        assert_eq!(query.saved.map(|f| f.from), Some(vec!["dana".to_string()]));
+        assert!(query.filter.unread, "the live filter stays its own");
+    }
+
+    /// G2: a `Saved` scope whose filter did not come through builds no query at all, so both
+    /// readers that go through `list_query` — the page read and the select-all's match read —
+    /// see nothing. Without the guard `store_scope` still answers `Scope::All`, and with an
+    /// empty live filter that query is every thread of every account.
+    #[test]
+    fn a_saved_scope_with_no_filter_builds_no_query() {
+        let request = ListRequest {
+            seq: 1,
+            scope: ScopeChoice::Saved {
+                index: 7,
+                name: "gone".into(),
+            },
+            addresses: vec!["w@example.com".into()],
+            names: names(),
+            filter: parse(""),
+            saved: None,
+            saved_all: Vec::new(),
+            at: PageAt::First,
+            utc_offset: 0,
+        };
+        assert_eq!(
+            store_scope(&request.scope, &[Some(1)]),
+            Some(Scope::All { accounts: vec![1] }),
+            "the scope on its own is still every folder"
+        );
+        assert!(list_query(&request, &[Some(1)]).is_none());
+    }
+
+    /// #110: a saved query with no condition — empty, or only words the full-text query
+    /// drops — would list every thread of every account, Trash and Spam included, and a
+    /// select-all would take them. It fails closed like a missing filter; a saved `account:`
+    /// on its own still narrows, so it still reads.
+    #[test]
+    fn a_saved_filter_with_no_condition_builds_no_query() {
+        let request = |saved: &str| ListRequest {
+            seq: 1,
+            scope: ScopeChoice::Saved {
+                index: 0,
+                name: "all".into(),
+            },
+            addresses: vec!["w@example.com".into()],
+            names: names(),
+            filter: parse(""),
+            saved: Some(parse(saved)),
+            saved_all: vec![parse(saved)],
+            at: PageAt::First,
+            utc_offset: 0,
+        };
+        for saved in ["", "* ( )"] {
+            assert!(
+                list_query(&request(saved), &[Some(1)]).is_none(),
+                "{saved:?}"
+            );
+        }
+        assert!(list_query(&request("account:work"), &[Some(1)]).is_some());
     }
 }

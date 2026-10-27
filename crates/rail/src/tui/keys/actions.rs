@@ -99,6 +99,7 @@ actions! {
     GlobalUndo => "global.undo", [Global], ["z"], "Undo the last action";
     ListOpen => "list.open", [List], ["enter"], "Open the thread";
     ListFilter => "list.filter", [List], ["/"], "Filter the list as you type";
+    ListSaveSearch => "list.save_search", [List], ["S"], "Save the filter as a search";
     ListSidebar => "list.sidebar", [List, Sidebar], ["b"], "Show or hide the sidebar";
     ListAccount1 => "list.account_1", [List, Sidebar], ["1"], "Go to account 1's inbox";
     ListAccount2 => "list.account_2", [List, Sidebar], ["2"], "Go to account 2's inbox";
@@ -142,6 +143,8 @@ actions! {
     SidebarPageUp => "sidebar.page_up", [Sidebar], ["pageup", "ctrl-u"], "One page up";
     SidebarOpen => "sidebar.open", [Sidebar], ["enter"], "Show this mailbox";
     SidebarFold => "sidebar.fold", [Sidebar], ["space", "left", "right"], "Fold or unfold this account or folder";
+    SidebarRenameSearch => "sidebar.rename_search", [Sidebar], ["r"], "Rename this saved search";
+    SidebarRemoveSearch => "sidebar.remove_search", [Sidebar], ["d"], "Remove this saved search (asks first)";
     ReaderNext => "reader.next", [Reader], ["n"], "Next message";
     ReaderPrev => "reader.prev", [Reader], ["p"], "Previous message";
     ReaderExpand => "reader.expand", [Reader], ["tab"], "Expand or collapse the message";

@@ -592,6 +592,13 @@ impl MailScreen {
             Target::Time => self.toggle_time(),
             Target::ThreadOrder => self.toggle_thread_order(),
             Target::DimRead => self.cycle_dim_read(),
+            Target::SaveSearch => self.save_search_prompt(),
+            // Not the sidebar cursor's row: the palette has no cursor, so each entry names
+            // its own search — and carries the name it showed, because the list can be
+            // replaced while the palette is up.
+            Target::RenameSearch { index, name } => self.rename_search_prompt(index, &name),
+            Target::RemoveSearch { index, name } => self.remove_search_confirm(index, &name),
+            Target::SearchCounts => self.toggle_search_counts(),
             Target::Scope(scope) => {
                 let mut effects = self.close_reader();
                 effects.extend(self.set_scope(scope));

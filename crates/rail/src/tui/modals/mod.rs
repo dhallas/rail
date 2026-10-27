@@ -9,6 +9,7 @@ pub mod filter;
 pub mod help;
 pub mod palette;
 pub mod picker;
+pub mod prompt;
 mod scroll;
 #[cfg(test)]
 mod tests;
@@ -27,6 +28,7 @@ pub use filter::FilterLine;
 pub use help::Help;
 pub use palette::{Palette, PaletteEntry, Target};
 pub use picker::{AccentAnswer, Picker, PickerItem, PickerKind};
+pub use prompt::TextPrompt;
 
 use crate::tui::theme::Theme;
 
@@ -86,6 +88,25 @@ pub enum Command {
     SaveAttachment(AttachmentTarget),
     /// Save every attachment of this part's message (the list's `S`).
     SaveAllAttachments(AttachmentTarget),
+    /// The name prompt's answer: save the filter in force as a search called `name`.
+    SaveSearch {
+        name: String,
+    },
+    /// The name prompt's answer: the saved search `old` — at `index` when the prompt opened —
+    /// is renamed to `name`. The old name travels with the index because the list can be
+    /// replaced under an open prompt, and an index resolved at `Enter` time would then name a
+    /// different search.
+    RenameSearch {
+        index: usize,
+        old: String,
+        name: String,
+    },
+    /// The removal question was answered yes for the saved search `name`, at `index` when the
+    /// question was asked. Both are carried for the reason `RenameSearch` gives.
+    RemoveSearch {
+        index: usize,
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +129,8 @@ pub enum Modal {
     Picker(Picker),
     Help(Help),
     Errors(ErrorList),
+    /// The one-line name prompt behind `S` and `r`.
+    Prompt(TextPrompt),
 }
 
 impl Modal {
@@ -121,6 +144,7 @@ impl Modal {
             Self::Picker(picker) => picker.key(key),
             Self::Help(help) => help.key(key),
             Self::Errors(list) => list.key(key),
+            Self::Prompt(prompt) => prompt.key(key),
         }
     }
 
@@ -128,7 +152,11 @@ impl Modal {
     pub fn captures_text(&self) -> bool {
         matches!(
             self,
-            Self::LinkNumber(_) | Self::Filter(_) | Self::Palette(_) | Self::Picker(_)
+            Self::LinkNumber(_)
+                | Self::Filter(_)
+                | Self::Palette(_)
+                | Self::Picker(_)
+                | Self::Prompt(_)
         )
     }
 
@@ -142,6 +170,7 @@ impl Modal {
             Self::Picker(picker) => picker.render(frame, area, theme),
             Self::Help(help) => help.render(frame, area, theme),
             Self::Errors(list) => list.render(frame, area, theme),
+            Self::Prompt(prompt) => prompt.render(frame, area, theme),
         }
     }
 }

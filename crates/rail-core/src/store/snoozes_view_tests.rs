@@ -14,6 +14,7 @@ pub(super) fn snoozed(store: &Store) -> Vec<i64> {
     let query = ListQuery {
         scope: Scope::Snoozed { accounts: vec![1] },
         filter: parse(""),
+        saved: None,
         account: AccountFilter::Any,
         utc_offset: 0,
     };
@@ -24,7 +25,7 @@ pub(super) fn snoozed(store: &Store) -> Vec<i64> {
 }
 
 fn counted(store: &Store) -> u64 {
-    store.sidebar_counts(&[1]).unwrap().unified.snoozed
+    store.sidebar_counts(&[1], &[], 0).unwrap().unified.snoozed
 }
 
 pub(super) fn until(store: &Store, thread: i64) -> Option<i64> {

@@ -6,16 +6,21 @@ pub mod lock;
 #[cfg(test)]
 mod lock_tests;
 pub mod model;
+pub mod saved;
 
 pub use edit::{
-    append_account, default_account_name, remove_account, set_general, set_general_bool,
-    set_general_number, set_general_text, set_secrets,
+    append_account, default_account_name, put_saved_search, remove_account, remove_saved_search,
+    set_general, set_general_bool, set_general_number, set_general_text, set_secrets,
 };
 pub use load::{ConfigError, MAX_ADDRESS_CHARS, line_col, load, load_text_or_empty, parse};
 pub use model::{
     AccentSpec, AccountConfig, AccountKind, AiSend, Config, DAY_SECS, DimRead, FolderModel,
     General, Icons, Layout, OnePasswordConfig, SecretsBackend, SyncSettings, ThreadOrder,
     TimeFormat, is_format_char, is_plain, not_plain,
+};
+pub use saved::{
+    MAX_SAVED_SEARCH_NAME_CHARS, MAX_SAVED_SEARCHES, NameProblem, SavedSearch, check_name,
+    check_put, duplicate_name, name_rule,
 };
 /// A config value with its byte range in the file (for line numbers).
 pub use toml::Spanned;

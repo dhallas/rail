@@ -50,6 +50,8 @@ mod m365_tests;
 #[cfg(test)]
 mod manage_tests;
 #[cfg(test)]
+mod saved_tests;
+#[cfg(test)]
 mod snooze_tests;
 #[cfg(test)]
 mod sync_tests;

@@ -73,6 +73,8 @@ impl std::fmt::Debug for SaveCall {
 #[derive(Clone)]
 pub struct DaemonLink {
     /// Shared with `attachments_link`, which holds the two attachment calls.
+    /// `pub(super)` so a sibling module can add an op's method without this file growing past
+    /// the 800-line cap.
     pub(super) link: Link,
 }
 
@@ -471,6 +473,13 @@ pub struct FakeDaemon {
     /// Numbers the token directories the default `attachment.open` answer writes, so two
     /// opens never share one.
     pub next_token: std::sync::atomic::AtomicI64,
+    /// The fake's own saved searches, which a `put` or `remove` applies to when
+    /// `saved_answer` is unset.
+    pub saved: std::sync::Mutex<Vec<rail_core::config::SavedSearch>>,
+    /// The answer to the next `saved_search.put` or `saved_search.remove`; the request applied
+    /// to `saved` when unset.
+    pub saved_answer:
+        std::sync::Mutex<Option<Result<rail_core::ops::SavedSearchListResponse, OpError>>>,
 }
 
 #[cfg(test)]
@@ -536,6 +545,14 @@ pub enum FakeCall {
         account: String,
         message_id: String,
         part_id: String,
+    },
+    SavedSearchPut {
+        name: String,
+        query: Option<String>,
+        replaces: Option<String>,
+    },
+    SavedSearchRemove {
+        name: String,
     },
 }
 

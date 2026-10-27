@@ -58,6 +58,8 @@ fn every_operation_name_is_unique_and_matches_its_marker() {
         SnoozeClear::NAME,
         AttachmentSave::NAME,
         AttachmentOpen::NAME,
+        SavedSearchPut::NAME,
+        SavedSearchRemove::NAME,
     ];
     assert_eq!(markers, names::ALL);
     for internal in [Hello::NAME, DaemonInfoOp::NAME, DaemonStop::NAME] {
@@ -716,4 +718,14 @@ fn body_fetch_outcomes_are_flat_and_carry_no_body() {
     let back: BodyFetchResponse = serde_json::from_value(value).unwrap();
     assert_eq!(back, response);
     assert!(properties::<BodyFetchRequest>().contains("message_ids"));
+}
+
+/// #109: a rename leaves `query` out, so the daemon keeps the one in the file.
+#[test]
+fn a_saved_search_rename_carries_no_query() {
+    let rename: crate::ops::SavedSearchPutRequest =
+        serde_json::from_value(json!({"name": "later", "replaces": "dana"})).unwrap();
+    let value = serde_json::to_value(&rename).unwrap();
+    assert!(value["query"].is_null(), "{value}");
+    assert_eq!(value["replaces"], "dana");
 }

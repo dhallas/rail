@@ -6,6 +6,9 @@ mod attachments_link;
 #[cfg(test)]
 mod bulk_tests;
 mod daemon_link;
+mod saved_link;
+#[cfg(test)]
+mod saved_tests;
 mod store_reader;
 #[cfg(test)]
 mod tests;
@@ -16,6 +19,7 @@ use std::time::Duration;
 
 use futures_util::FutureExt;
 
+use rail_core::config::SavedSearch;
 use rail_core::ops::{
     AccountSyncStatus, ActionApplyResponse, ActionFailed, ActionRetryResponse, ActionUndoResponse,
     AttachmentOpenResponse, AttachmentSaveResponse, BodyFetchResponse, DraftId,
@@ -256,6 +260,20 @@ pub enum MailEvent {
         part_id: String,
         filename: String,
     },
+    /// `saved_search.put` or `saved_search.remove` answered: the whole new list. `renamed` is
+    /// the rename **this** request asked for, old name then new, and `None` on every other
+    /// write. Every answer carries the whole list, so without it the screen cannot tell a
+    /// rename's answer from the next write's — and an unrelated failure in between would lose
+    /// the pair the open scope and the sidebar cursor are re-keyed through (FR-17 step 1).
+    SavedSearchesChanged {
+        result: Result<Vec<SavedSearch>, OpError>,
+        renamed: Option<(String, String)>,
+    },
+    /// `config.toml` was written for `:search-counts`; the error is a config or IO error's
+    /// text, never a name and never a query.
+    SearchCountsSaved {
+        result: Result<(), String>,
+    },
 }
 
 /// Names and numbers only: a `MailEvent` carries mail, which must never reach a log.
@@ -463,6 +481,18 @@ impl fmt::Debug for MailEvent {
                 .finish(),
             Self::AttachmentOpened { result, .. } => f
                 .debug_struct("AttachmentOpened")
+                .field("ok", &result.is_ok())
+                .finish(),
+            // Never the pair itself: a saved search's name is outside text, so only whether
+            // this answer belongs to a rename is printed.
+            Self::SavedSearchesChanged { result, renamed } => f
+                .debug_struct("SavedSearchesChanged")
+                .field("ok", &result.is_ok())
+                .field("len", &result.as_ref().map_or(0, Vec::len))
+                .field("renamed", &renamed.is_some())
+                .finish(),
+            Self::SearchCountsSaved { result } => f
+                .debug_struct("SearchCountsSaved")
                 .field("ok", &result.is_ok())
                 .finish(),
         }

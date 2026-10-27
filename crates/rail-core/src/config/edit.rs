@@ -220,6 +220,95 @@ fn no_such_account(path: &Path, name: &str) -> ConfigError {
     }
 }
 
+/// Return `text` with a saved search written. With `replaces`, the `[[saved_searches]]` table
+/// of that name is edited **in place**, keeping its position in the file and the comments
+/// around it, so the sidebar row does not move; otherwise a new table is appended. Names are
+/// matched ignoring ASCII case, the rule the loader makes them unique by. A `None` query
+/// leaves the edited table's `query` line exactly as the file has it. Validates the result.
+///
+/// # Errors
+/// The text is not valid TOML, `saved_searches` is not an array of tables, `replaces` names no
+/// entry, or the result would not load (a new table given no query among them).
+pub fn put_saved_search(
+    text: &str,
+    path: &Path,
+    name: &str,
+    query: Option<&str>,
+    replaces: Option<&str>,
+) -> Result<String, ConfigError> {
+    let mut doc = document(text, path)?;
+    let searches = doc
+        .entry("saved_searches")
+        .or_insert(Item::ArrayOfTables(ArrayOfTables::new()))
+        .as_array_of_tables_mut()
+        .ok_or_else(|| not_an_array_of_tables(path, "saved_searches"))?;
+    let index = if let Some(old) = replaces {
+        saved_search_at(searches, old).ok_or_else(|| no_such_saved_search(path, old))?
+    } else {
+        searches.push(Table::new());
+        searches.len() - 1
+    };
+    let table = searches
+        .get_mut(index)
+        .ok_or_else(|| not_an_array_of_tables(path, "saved_searches"))?;
+    // Each line only when its value changed: `set_string` keeps the line's trailing comment,
+    // but it cannot keep a literal string's `'…'` form, so writing a value back unchanged
+    // would re-quote a line the caller asked nothing of. Not writing it is what keeps the
+    // user's quoting (FR-20). Compared exactly, not the way the daemon keys a name, so a
+    // case-only rename still writes the new case. A table just pushed has neither key, so
+    // `None != Some(…)` writes both.
+    if table.get("name").and_then(Item::as_str) != Some(name) {
+        set_string(table, "name", name);
+    }
+    if let Some(query) = query.filter(|q| table.get("query").and_then(Item::as_str) != Some(*q)) {
+        set_string(table, "query", query);
+    }
+    let out = doc.to_string();
+    parse(&out, path)?;
+    Ok(out)
+}
+
+/// Return `text` without the `[[saved_searches]]` table named `name` (ignoring ASCII case).
+/// Other searches, other tables and comments stay. Validates the result.
+///
+/// # Errors
+/// The text is not valid TOML, there is no such entry, or the result would not load.
+pub fn remove_saved_search(text: &str, path: &Path, name: &str) -> Result<String, ConfigError> {
+    let mut doc = document(text, path)?;
+    let searches = doc
+        .get_mut("saved_searches")
+        .and_then(Item::as_array_of_tables_mut)
+        .ok_or_else(|| no_such_saved_search(path, name))?;
+    let index = saved_search_at(searches, name).ok_or_else(|| no_such_saved_search(path, name))?;
+    searches.remove(index);
+    let out = doc.to_string();
+    parse(&out, path)?;
+    Ok(out)
+}
+
+/// The position of the `[[saved_searches]]` table named `name`, ignoring ASCII case.
+fn saved_search_at(searches: &ArrayOfTables, name: &str) -> Option<usize> {
+    searches.iter().position(|t| {
+        t.get("name")
+            .and_then(Item::as_str)
+            .is_some_and(|n| n.eq_ignore_ascii_case(name))
+    })
+}
+
+fn no_such_saved_search(path: &Path, name: &str) -> ConfigError {
+    ConfigError::Invalid {
+        path: path.to_path_buf(),
+        message: format!("no [[saved_searches]] entry named {name:?}"),
+    }
+}
+
+fn not_an_array_of_tables(path: &Path, key: &str) -> ConfigError {
+    ConfigError::Invalid {
+        path: path.to_path_buf(),
+        message: format!("`{key}` must be an array of tables ([[{key}]])"),
+    }
+}
+
 /// `dana.reyes+x@corp.com` -> `dana_reyes_x`, suffixed `-2`, `-3`... if taken.
 pub fn default_account_name(address: &str, config: &Config) -> String {
     let local = address
@@ -534,5 +623,172 @@ mod tests {
                 "{message:?}"
             );
         }
+    }
+
+    /// AC-24 (FR-20): the user's comments and every other table survive a save, a rename and a
+    /// removal, and a rename edits its table **in place** so the sidebar row keeps its
+    /// position (D-5).
+    #[test]
+    fn saved_search_edits_keep_comments() {
+        let path = Path::new("c.toml");
+        let text = "# my rail config\n[general]\neditor = \"nvim\" # the good one\n\n# the one that matters\n[[saved_searches]]\nname = \"needs-reply\"\nquery = \"from:dana is:unread\"\n\n[[accounts]]\nname = \"work\"\nkind = \"gmail\"\naddress = \"me@example.com\"\nclient_id = \"g\"\n";
+        assert_eq!(parse(text, path).unwrap().saved_searches.len(), 1);
+
+        let added = put_saved_search(text, path, "big", Some("has:attachment"), None).unwrap();
+        assert!(added.contains("# my rail config"), "{added}");
+        assert!(
+            added.contains("editor = \"nvim\" # the good one"),
+            "{added}"
+        );
+        assert!(added.contains("# the one that matters"), "{added}");
+        let config = parse(&added, path).unwrap();
+        let names: Vec<_> = config
+            .saved_searches
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert_eq!(names, ["needs-reply", "big"], "a new search is appended");
+        assert_eq!(config.saved_searches[1].query, "has:attachment");
+        assert_eq!(config.accounts.len(), 1, "other tables are untouched");
+
+        // A rename keeps the entry's position, its query and the comment above it.
+        let renamed = put_saved_search(
+            &added,
+            path,
+            "later",
+            Some("from:dana is:unread"),
+            Some("needs-reply"),
+        )
+        .unwrap();
+        assert!(renamed.contains("# the one that matters"), "{renamed}");
+        let config = parse(&renamed, path).unwrap();
+        let names: Vec<_> = config
+            .saved_searches
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert_eq!(names, ["later", "big"], "renamed in place, not re-appended");
+        assert_eq!(config.saved_searches[0].query, "from:dana is:unread");
+
+        let gone = remove_saved_search(&renamed, path, "later").unwrap();
+        assert!(gone.contains("# my rail config"), "{gone}");
+        assert!(gone.contains("editor = \"nvim\" # the good one"), "{gone}");
+        let config = parse(&gone, path).unwrap();
+        let names: Vec<_> = config
+            .saved_searches
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect();
+        assert_eq!(names, ["big"]);
+
+        let last = remove_saved_search(&gone, path, "big").unwrap();
+        let config = parse(&last, path).unwrap();
+        // Counted, not shown: `SavedSearch` has no `Debug` (§8 Privacy), so `assert_eq!`
+        // against an empty slice would need one.
+        assert!(
+            config.saved_searches.is_empty(),
+            "{} left",
+            config.saved_searches.len()
+        );
+        assert!(!last.contains("[[saved_searches]]"), "{last}");
+        assert_eq!(config.accounts.len(), 1);
+
+        let err = remove_saved_search(&last, path, "big").unwrap_err();
+        assert!(
+            err.to_string().contains("no [[saved_searches]] entry"),
+            "{err}"
+        );
+        let err = put_saved_search(&last, path, "x", Some("is:unread"), Some("gone")).unwrap_err();
+        assert!(
+            err.to_string().contains("no [[saved_searches]] entry"),
+            "{err}"
+        );
+    }
+
+    /// FR-20 and README's "your comments, formatting and other tables survive each write", on
+    /// the two lines a rename touches. Assigning `table["name"]`/`table["query"]` replaces the
+    /// item together with its decor, so the trailing comment on each line goes and a literal
+    /// query is re-quoted; `set_string` keeps the decor, and an unchanged query is not written
+    /// at all, which is the only thing that keeps its `'…'` form. A rename to the same name
+    /// writes nothing, so the file comes back byte for byte.
+    #[test]
+    fn a_rename_keeps_the_comments_and_quoting_of_its_lines() {
+        let path = Path::new("c.toml");
+        let text = "[[saved_searches]]\nname = \"needs-reply\" # triage queue\nquery = 'from:dana is:unread' # weekly review\n\n[[accounts]]\nname = \"work\"\nkind = \"gmail\"\naddress = \"me@example.com\"\nclient_id = \"g\"\n";
+        let config = parse(text, path).unwrap();
+        assert_eq!(config.saved_searches[0].query, "from:dana is:unread");
+
+        let renamed = put_saved_search(
+            text,
+            path,
+            "later",
+            Some("from:dana is:unread"),
+            Some("needs-reply"),
+        )
+        .unwrap();
+        assert!(
+            renamed.contains("name = \"later\" # triage queue"),
+            "the name's own comment stays: {renamed}"
+        );
+        assert!(
+            renamed.contains("query = 'from:dana is:unread' # weekly review"),
+            "an unchanged query keeps its comment and its single quotes: {renamed}"
+        );
+        assert_eq!(parse(&renamed, path).unwrap().accounts.len(), 1);
+
+        // A query that did change is written, and keeps its line's comment.
+        let requeried =
+            put_saved_search(&renamed, path, "later", Some("from:dana"), Some("later")).unwrap();
+        assert!(
+            requeried.contains("query = \"from:dana\" # weekly review"),
+            "{requeried}"
+        );
+
+        let same = put_saved_search(
+            text,
+            path,
+            "needs-reply",
+            Some("from:dana is:unread"),
+            Some("needs-reply"),
+        )
+        .unwrap();
+        assert_eq!(same, text, "a rename to the same name writes nothing");
+    }
+
+    /// FR-20's other half, for the **name** line. `set_string` keeps a line's trailing comment
+    /// but cannot keep a literal string's `'…'` form, so writing a name that did not change
+    /// re-quotes `'later'` to `"later"` and edits a line the user asked nothing of. The
+    /// byte-for-byte check above cannot see this: its name is a basic string, where writing
+    /// the same value back is invisible. A case-only rename is a real change and is still
+    /// written.
+    #[test]
+    fn a_rename_that_does_not_change_the_name_leaves_it_as_written() {
+        let path = Path::new("c.toml");
+        let text =
+            "[[saved_searches]]\nname = 'later' # literal name\nquery = 'from:dana' # literal\n";
+        let same = put_saved_search(text, path, "later", Some("from:dana"), Some("later")).unwrap();
+        assert_eq!(same, text, "a no-op rename writes neither line");
+
+        let cased =
+            put_saved_search(text, path, "LATER", Some("from:dana"), Some("later")).unwrap();
+        assert!(
+            cased.contains("name = \"LATER\" # literal name"),
+            "a case-only rename is written, and keeps its line's comment: {cased}"
+        );
+        assert_eq!(parse(&cased, path).unwrap().saved_searches[0].name, "LATER");
+    }
+
+    /// #109: a rename with no query leaves the query line exactly as the file has it, even
+    /// when it was edited by hand after the caller last read it.
+    #[test]
+    fn a_rename_without_a_query_keeps_the_files_query() {
+        let path = Path::new("c.toml");
+        let text = "[[saved_searches]]\nname = \"later\"\n# by hand\nquery = 'from:dana is:unread' # mine\n";
+        let renamed = put_saved_search(text, path, "soon", None, Some("later")).unwrap();
+        assert_eq!(renamed, text.replace("\"later\"", "\"soon\""));
+        assert!(
+            put_saved_search(text, path, "new", None, None).is_err(),
+            "a new one needs a query"
+        );
     }
 }

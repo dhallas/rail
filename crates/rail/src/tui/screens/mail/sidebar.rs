@@ -22,6 +22,8 @@ pub struct Sidebar {
     folds: Folds,
     /// The accounts' labels and addresses and the counts the rows came from, kept for a fold.
     accounts: Vec<TreeAccount>,
+    /// The saved searches' names, in config order: kept so a fold can rebuild without them.
+    saved: Vec<String>,
     outcome: Option<SidebarOutcome>,
     /// The last read failed: the old rows stay, under a note.
     failed: bool,
@@ -55,8 +57,15 @@ impl Sidebar {
             .unwrap_or(0)
     }
 
-    /// The rows for `accounts` (in order) from fresh counts; the folds and the cursor stay.
-    pub fn rebuild(&mut self, accounts: &[AccountEntry], outcome: &SidebarOutcome) {
+    /// The rows for `accounts` and `saved` (both in config order) from fresh counts; the folds
+    /// and the cursor stay.
+    pub fn rebuild(
+        &mut self,
+        accounts: &[AccountEntry],
+        saved: &[String],
+        outcome: &SidebarOutcome,
+    ) {
+        self.saved = saved.to_vec();
         self.accounts = accounts
             .iter()
             .map(|a| TreeAccount {
@@ -83,7 +92,7 @@ impl Sidebar {
         let Some(outcome) = &self.outcome else {
             return;
         };
-        let all = sidebar_tree::build(&self.accounts, outcome, &self.folds);
+        let all = sidebar_tree::build(&self.accounts, &self.saved, outcome, &self.folds);
         let rows = sidebar_tree::visible(&all, &self.folds);
         self.cursor = sidebar_tree::refind(&self.rows, self.cursor.as_ref(), &rows);
         self.all = all;
@@ -244,6 +253,15 @@ impl Sidebar {
         self.relayout();
     }
 
+    /// A renamed saved search keeps the cursor. A saved row's key **is** its name, so the
+    /// cursor's key is renamed before the rows are built again; otherwise `refind` would read
+    /// the rename as a removal and drop the cursor to the row above it.
+    pub fn rename_cursor(&mut self, old: &str, new: &str) {
+        if self.cursor.as_ref() == Some(&RowKey::Saved(old.to_string())) {
+            self.cursor = Some(RowKey::Saved(new.to_string()));
+        }
+    }
+
     /// `scope` as the sidebar has it now (a renamed label's new name), shown or folded away.
     pub fn find(&self, scope: &ScopeChoice) -> Option<ScopeChoice> {
         self.all
@@ -286,6 +304,8 @@ impl Sidebar {
             ScopeChoice::Sent | ScopeChoice::Trash | ScopeChoice::Drafts | ScopeChoice::Snoozed => {
                 0
             }
+            // Positional, in config order; empty while the counts are off.
+            ScopeChoice::Saved { index, .. } => counts.saved.get(*index).copied().unwrap_or(0),
         }
     }
 }
@@ -312,7 +332,8 @@ impl MailScreen {
         }
         match result {
             Ok(outcome) => {
-                self.sidebar.rebuild(&self.accounts, &outcome);
+                let saved: Vec<String> = self.saved.iter().map(|s| s.name.clone()).collect();
+                self.sidebar.rebuild(&self.accounts, &saved, &outcome);
                 self.follow_scope()
             }
             Err(error) => {
@@ -359,6 +380,7 @@ mod tests {
         let folds = Folds::default();
         let all = sidebar_tree::build(
             &sidebar_tree::fixtures::accounts(),
+            &[],
             &sidebar_tree::fixtures::two_accounts(),
             &folds,
         );

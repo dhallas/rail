@@ -50,6 +50,10 @@ pub mod view;
 #[cfg(test)]
 mod view_attachments_tests;
 mod view_labels;
+mod view_saved;
+#[cfg(test)]
+mod view_saved_tests;
+mod view_sidebar;
 #[cfg(test)]
 mod view_sidebar_tests;
 mod view_targets;
