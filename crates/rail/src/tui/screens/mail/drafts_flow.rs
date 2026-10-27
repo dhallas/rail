@@ -98,8 +98,9 @@ impl MailScreen {
                 return Some(row.map_or_else(Vec::new, |row| self.open_draft_row(row)));
             }
             Action::ListTrash => return Some(self.confirm_discard_row()),
-            Action::ListDown => pane.move_by(1),
-            Action::ListUp => pane.move_by(-1),
+            // Nothing is selected in the pane: extending moves, as `j`/`k` do.
+            Action::ListDown | Action::ListExtendDown => pane.move_by(1),
+            Action::ListUp | Action::ListExtendUp => pane.move_by(-1),
             Action::ListPageDown => pane.move_by(page),
             Action::ListPageUp => pane.move_by(-page),
             Action::ListTop => pane.top(),
@@ -112,6 +113,9 @@ impl MailScreen {
             | Action::ListLabels
             | Action::ListMove
             | Action::ListSelect
+            | Action::ListSelectAll
+            | Action::ListSelectSender
+            | Action::ListSelectRange
             | Action::ListReply
             | Action::ListReplyAll
             | Action::ListForward

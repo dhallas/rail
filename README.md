@@ -230,13 +230,17 @@ Every key Rail reads is an *action* with an id and a default key. Change one in 
 
 A key name is a character (`a`, `O`, `/`), a named key (`enter`, `esc`, `tab`, `backtab`,
 `space`, `up`, `down`, `left`, `right`, `pageup`, `pagedown`, `home`, `end`, `f1` to `f12`),
-either with `ctrl-`, `alt-` or `shift-` in front (`ctrl-r`, `shift-tab`), or two keys with a
+either with `ctrl-`, `alt-` or `shift-` in front (`ctrl-r`, `shift-tab`, `shift-down`; `shift-`
+goes on a letter, `tab`, `up` or `down`), or two keys with a
 space between them for a sequence (`g x`). A key you set replaces that action's default keys.
 Both `rail` and `rail setup` refuse to start, naming the file and line and exiting 1, when `[keys]`
 names an action it does not know, a key it cannot read, `Ctrl-C` (which always quits), or a key
 another action of the same view already uses (a key that starts another action's sequence
 counts). They check before the terminal changes. A view's own key wins over a global one: `q`
-closes the reader but quits from the list.
+closes the reader but quits from the list. The defaults count too: `J`, `K`, `shift-down` and
+`shift-up` extend the selection in the list, so a `[keys]` entry that binds one of them to another
+list action (`"list.down" = "J"`, say) stops Rail from starting with that error until you change
+the entry or move `list.extend_down` / `list.extend_up` to other keys.
 
 The `global.*`, `list.*`, `sidebar.*`, `reader.*` and `compose.*` actions below take effect in the
 mail screen and the `wizard.*` ones in the setup wizard. In the mail screen `?` lists the keys of the view you
@@ -280,6 +284,11 @@ are in, with `*` after the ones set in `config.toml`.
 | `list.forward` | list, reader | `f` | Forward the latest message. |
 | `list.select` | list | `space` | Select or unselect the thread. |
 | `list.clear_selection` | list | `esc` | Clear the selection. |
+| `list.select_all` | list | `* a` | Select every thread this mailbox and filter match. |
+| `list.select_sender` | list | `* f` | Select every thread from this sender. |
+| `list.select_range` | list | `v` | Select a range of threads. |
+| `list.extend_down` | list | `J` `shift-down` | Extend the selection down. |
+| `list.extend_up` | list | `K` `shift-up` | Extend the selection up. |
 | `sidebar.focus` | list, sidebar | `tab` | Move between the sidebar and the list. |
 | `sidebar.down` | sidebar | `j` `down` | Next mailbox. |
 | `sidebar.up` | sidebar | `k` `up` | Previous mailbox. |
@@ -562,7 +571,9 @@ first, `Trash "subject"?` or `Trash 3 threads?`, and says what the trash does: G
 mail in its Trash for 30 days, and on Microsoft 365 it `Moves to Deleted Items.`; Rail never
 deletes mail for good), `s` stars or unstars (it stars unless every thread is already
 starred), `u` marks read or unread (it marks read if any thread is unread). An action applies to
-the whole thread, as in Gmail. The list changes at once; the daemon sends the change to the account's server (Gmail or
+the whole thread, as in Gmail. Over 50 threads (`bulk_confirm` under `[general]`) `e`, `s` and `u`
+ask first too, naming the count, for example `Archive 1,234 threads?`; `d` always asks. The list
+changes at once; the daemon sends the change to the account's server (Gmail or
 Microsoft 365) in the background, so it also goes through if you quit Rail.
 
 `l` opens the account's labels: type to filter, `Space` ticks or unticks, `Enter` applies (labels
@@ -579,6 +590,40 @@ applies to every selected thread, then the selection clears; `Esc` clears it. Th
 while you change the filter or the mailbox. In the reader, the keys act on the open thread, not on
 the selection, which stays as it was (`Space` still pages down, and selecting is for the list);
 archive, trash and move close the reader.
+
+`* a` selects every thread this mailbox and filter match — newest first, at most 10,000, and the
+header then reads `10,000 selected (more match)`; when nothing matches it says `Nothing matches.`
+and selects nothing. `* f` puts the sender of the thread under the cursor into the filter line as
+`from:<address>` and selects every thread with any message from that address, as the same `from:`
+filter would show them: in the filter line that form matches that address exactly, where a plain
+`from:dana` matches every thread whose sender's name *or* address contains `dana`. The sender is
+that of the thread's newest message from someone else: your own messages (from the account's
+address, or in its Sent or Drafts) are passed over, so a thread you answered last selects by the
+person you answered. A thread with no such message with a readable sender, or one whose address
+the filter cannot carry, says `This thread has no sender to select by.` and changes nothing. If
+you change the mailbox or the filter before `* a` or `* f` has answered, its answer is dropped and
+nothing is selected.
+
+`v` starts a range at the thread under the cursor: the bar says `range from here`, and while the
+range is open its first key hint is `Esc range`. Move as usual, then `v` or `Esc` ends the range
+and keeps every thread it covered; `Esc` again clears the selection, as before. If the thread you
+started from has left the list by then, Rail says `The range start is no longer in the list.` and
+selects nothing.
+
+`J` or `Shift-↓` extends the selection down from the thread under the cursor, and `K` or `Shift-↑`
+up: the first press selects that thread and the next, and each further press one more. Going
+back toward where you started unselects what the extension added; threads you had selected before
+stay selected. Any other key ends the extension and keeps what it selected, so `J` after a move
+starts again from the new place. A terminal that does not report Shift with the arrows still has
+`J` and `K`; elsewhere in Rail, the Drafts folder included, a Shift-arrow moves like the plain
+arrow, and there `J` and `K` move too. While `v` has a range open, `J`, `K` and the Shift-arrows
+only move. If a sync reads the list again while you extend and the thread you started from leaves
+it, the extension carries on from where the cursor was. A selection holds at most 10,000 threads:
+an extension or a `v` range it stops says `The selection holds at most 10,000 threads.`
+
+A bulk action goes out as one request per 200 threads per account, and one `z` takes the whole set
+back, reporting `undone` once; an undo that could take only part of it back says `undone in part:
+some were already sent`.
 
 After an action the status bar says what happened, in place of the key hints, for example `archived 3 · z undoes`. For ten
 seconds `z` takes it back; afterwards it says `Too late to undo.`, and with nothing done,
@@ -774,7 +819,8 @@ While a save to Gmail is still on its way the discard is refused
 draft that was deleted elsewhere before you opened or discarded it says
 `Gmail no longer has this draft`; one that cannot be fetched says `Could not open the draft: …` or
 `Could not discard the draft: …` with the reason. Archive, star, read, labels, move,
-select, reply, forward and the filter (`e`, `s`, `u`, `l`, `m`, `space`, `r`, `R`, `f`, `/`) say
+select, selecting all or by sender, the range, reply, forward and the filter
+(`e`, `s`, `u`, `l`, `m`, `space`, `* a`, `* f`, `v`, `r`, `R`, `f`, `/`) say
 `Not available on drafts`; `Esc` does nothing there and `c` writes a new message as everywhere.
 The search slot is empty in this folder: the pane is not filtered. The pane is read again whenever
 sync or the outbox
@@ -1177,6 +1223,7 @@ running syncs carry on unchanged.
 | `thread_order` | `"oldest"` | How the reader lists a thread's older messages under the newest one: `"oldest"` first or `"newest"` first. `:thread-order` in the palette toggles it and saves it. |
 | `layout` | `"auto"` | Only `"auto"` works in this version; `"split"` and `"stack"` are accepted and act as `"auto"`. |
 | `editor` | unset | The command that writes mail, split like a shell command line (no shell runs), e.g. `"nvim"` or `"code --wait"`. Unset: `$VISUAL`, then `$EDITOR`, then `vi`. Read when the mail screen starts. |
+| `bulk_confirm` | `50` | How many threads an archive, star or mark-read may cover before Rail asks first; `0` never asks. Trash always asks. |
 
 ### `[[accounts]]`
 

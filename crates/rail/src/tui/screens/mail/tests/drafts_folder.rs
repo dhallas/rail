@@ -102,7 +102,7 @@ fn message_id(f: &Fixture, remote: &str) -> i64 {
 
 /// `fixture(3)` whose `work` has a Drafts folder holding, newest first: draft 2 (pushed, its
 /// Gmail copy `dm1`), the Gmail draft `dm2` no local draft owns, and draft 1 (local only).
-async fn drafts_fixture() -> Fixture {
+pub(super) async fn drafts_fixture() -> Fixture {
     let mut f = fixture(3).await;
     seed_local(
         &f,
@@ -156,7 +156,7 @@ async fn point_at_drafts(f: &mut Fixture) {
     }
 }
 
-async fn open_drafts(f: &mut Fixture) {
+pub(super) async fn open_drafts(f: &mut Fixture) {
     point_at_drafts(f).await;
     press(f, KeyCode::Enter).await;
     assert!(f.screen.in_drafts());
@@ -379,6 +379,38 @@ async fn thread_actions_are_not_available_on_drafts() {
         !line.contains("Not available on drafts"),
         "Esc is silent: {line}"
     );
+    assert_eq!(f.fake.calls.lock().unwrap().len(), before, "no call");
+    assert_eq!(pane_subjects(&f).len(), 3);
+}
+
+/// `* a`, `* f` and `v` are refused here like `Space` and `/`: the pane draws drafts, and the
+/// threads a selection would reach are the ones the folder replaced, which are drawn nowhere.
+#[tokio::test]
+async fn bulk_selection_keys_are_not_available_on_drafts() {
+    let mut f = drafts_fixture().await;
+    open_drafts(&mut f).await;
+    let before = f.fake.calls.lock().unwrap().len();
+    let reads = f.screen.ctx.store.queries();
+    for keys in [['*', 'a'], ['*', 'f'], ['v', 'v']] {
+        f.screen.status.notify("", f.screen.tick);
+        for c in keys {
+            press(&mut f, KeyCode::Char(c)).await;
+        }
+        let line = f.screen.status_line();
+        assert!(line.contains("Not available on drafts"), "{keys:?}: {line}");
+        assert!(f.screen.modal.is_none(), "{keys:?} opens nothing");
+        assert!(
+            f.screen.actions.selection.is_empty(),
+            "{keys:?} selects nothing"
+        );
+        assert!(
+            f.screen.filter_text.is_empty(),
+            "{keys:?} leaves the filter alone: {:?}",
+            f.screen.filter_text
+        );
+        assert!(!f.screen.bulk_range_on(), "{keys:?} arms no range");
+    }
+    assert_eq!(f.screen.ctx.store.queries(), reads, "no read");
     assert_eq!(f.fake.calls.lock().unwrap().len(), before, "no call");
     assert_eq!(pane_subjects(&f).len(), 3);
 }

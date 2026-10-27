@@ -5,6 +5,7 @@
 
 mod actions;
 mod actions_pick;
+mod bulk;
 mod clock_toggle;
 mod composing;
 mod composing_answers;
@@ -98,6 +99,9 @@ pub struct MailContext {
     pub clock: Clock,
     pub icons: Icons,
     pub split_threshold: u16,
+    /// `general.bulk_confirm`: how many threads an archive, star or mark-read may cover
+    /// before Rail asks first; `0` never asks.
+    pub bulk_confirm: u32,
     /// `general.hints`: the key hints in the bottom bar.
     pub hints: bool,
     /// `general.clock`: the time of day at the right edge of the header.
@@ -219,6 +223,8 @@ pub struct MailScreen {
     reader: Option<Reader>,
     modal: Option<Modal>,
     pub(crate) actions: actions::ActionState,
+    /// What the three bulk-select keys keep between presses.
+    pub(crate) bulk: bulk::BulkState,
     /// The theme kept and, while `:theme` or `:accent` is open, the one to restore.
     pub(crate) themes: themes::ThemeState,
     /// The key hints are shown: from the config, then whatever `:hints` chose this session.
@@ -291,6 +297,7 @@ impl MailScreen {
             reader: None,
             modal: None,
             actions: actions::ActionState::default(),
+            bulk: bulk::BulkState::default(),
             themes,
             hints,
             show_clock,
@@ -339,10 +346,9 @@ impl MailScreen {
             .unwrap_or_else(|| layout::sidebar_by_default(self.size.get().1))
     }
 
-    fn list_request(&mut self, at: PageAt, place: Place) -> ListRequest {
-        let seq = self.next_seq();
-        self.latest_list = seq;
-        self.place = place;
+    /// The screen's only `ListRequest` literal: what it reads the store with, whichever read
+    /// asks. A second copy would let the list and a select-all drift apart.
+    fn request(&self, seq: u64, at: PageAt) -> ListRequest {
         ListRequest {
             seq,
             scope: self.scope.clone(),
@@ -352,6 +358,22 @@ impl MailScreen {
             at,
             utc_offset: self.ctx.clock.utc_offset(),
         }
+    }
+
+    fn list_request(&mut self, at: PageAt, place: Place) -> ListRequest {
+        let seq = self.next_seq();
+        self.latest_list = seq;
+        self.place = place;
+        self.request(seq, at)
+    }
+
+    /// The request a select-all reads with. It leaves `place` alone, so a list read in flight
+    /// is not cancelled; `at` is unused by the query.
+    fn match_request(&mut self) -> ListRequest {
+        let seq = self.next_seq();
+        self.bulk.latest_match = seq;
+        self.bulk.match_shown = Some(self.shown());
+        self.request(seq, PageAt::First)
     }
 
     fn read_list(&mut self, at: PageAt, place: Place) -> Effect {
@@ -409,6 +431,10 @@ impl MailScreen {
     }
 
     pub(crate) fn act(&mut self, action: Action) -> Vec<Effect> {
+        if !matches!(action, Action::ListExtendDown | Action::ListExtendUp) {
+            // Any other key ends a Shift range; what it selected stays selected.
+            self.bulk.extending = None;
+        }
         if let Some(effects) = self.drafts_action(action) {
             return effects;
         }

@@ -2,6 +2,8 @@
 //! the store, read on blocking tasks (`StoreReader`), and the daemon (`DaemonLink`). Debounce
 //! timers are jobs too, so nothing runs while nothing happens.
 
+#[cfg(test)]
+mod bulk_tests;
 mod daemon_link;
 mod store_reader;
 #[cfg(test)]
@@ -18,10 +20,11 @@ use rail_core::ops::{
     BodyFetchResponse, DraftId, DraftImportResponse, DraftPushResponse, DraftSaveResponse,
     DraftSendResponse, OpError, OutboxId,
 };
+use rail_core::provider::Mailbox;
 use rail_core::store::AddressEntry;
 use rail_core::store::drafts::{Draft, ReplySource};
 use rail_core::store::drafts_folder::DraftsRow;
-use rail_core::store::view::{HtmlBody, LabelChoices, ThreadDetail};
+use rail_core::store::view::{HtmlBody, LabelChoices, ThreadDetail, ThreadKey};
 
 pub use daemon_link::SaveCall;
 pub use daemon_link::{ApplyCall, DaemonLink};
@@ -189,6 +192,16 @@ pub enum MailEvent {
     },
     /// The editor exited: its exit code, or why it could not run.
     EditorDone(Result<i32, String>),
+    /// `Store::matching_targets` answered for the select-all with this `seq`.
+    Matched {
+        seq: u64,
+        result: Result<Vec<(ThreadKey, i64, bool, bool)>, ReadError>,
+    },
+    /// `Store::newest_sender` answered for the select-by-sender with this `seq`.
+    Sender {
+        seq: u64,
+        result: Result<Option<Mailbox>, ReadError>,
+    },
 }
 
 /// Names and numbers only: a `MailEvent` carries mail, which must never reach a log.
@@ -346,6 +359,19 @@ impl fmt::Debug for MailEvent {
                 .finish(),
             Self::EditorDone(result) => f
                 .debug_struct("EditorDone")
+                .field("ok", &result.is_ok())
+                .finish(),
+            // The tuples hold thread ids, so only how many came back is named.
+            Self::Matched { seq, result } => f
+                .debug_struct("Matched")
+                .field("seq", seq)
+                .field("ok", &result.is_ok())
+                .field("len", &result.as_ref().map_or(0, Vec::len))
+                .finish(),
+            // `Mailbox` derives `Debug` over its name and address: neither is named here.
+            Self::Sender { seq, result } => f
+                .debug_struct("Sender")
+                .field("seq", seq)
                 .field("ok", &result.is_ok())
                 .finish(),
         }

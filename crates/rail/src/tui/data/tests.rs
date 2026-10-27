@@ -20,7 +20,7 @@ const WORK: &str = "[general]\nsecrets = \"file\"\n\n[[accounts]]\nname = \"work
 
 /// Run `effect`'s job and collect what it sends within `limit`; the job keeps running in the
 /// background when it has not finished.
-async fn events(effect: Effect, want: usize, limit: Duration) -> Vec<MailEvent> {
+pub(super) async fn events(effect: Effect, want: usize, limit: Duration) -> Vec<MailEvent> {
     let Effect::Spawn(job) = effect else {
         panic!("expected a job, got {effect:?}");
     };
@@ -40,7 +40,7 @@ async fn events(effect: Effect, want: usize, limit: Duration) -> Vec<MailEvent> 
     got
 }
 
-fn request(seq: u64, at: PageAt) -> ListRequest {
+pub(super) fn request(seq: u64, at: PageAt) -> ListRequest {
     ListRequest {
         seq,
         scope: ScopeChoice::Unified,

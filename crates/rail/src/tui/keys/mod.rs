@@ -179,7 +179,8 @@ impl Keymap {
         Ok(())
     }
 
-    /// What `key` means in `views` (most specific first), given a pending chord key.
+    /// What `key` means in `views` (most specific first), given a pending chord key. A
+    /// Shift-arrow nothing binds there means what the plain arrow means.
     pub fn resolve(&self, views: &[View], chord: &mut Chord, key: KeyEvent) -> Resolved {
         let pressed = Key::from_event(key);
         let first = chord.0.take();
@@ -207,6 +208,11 @@ impl Keymap {
         if first.is_some() {
             // The waiting key led nowhere: it is dropped and this key is read on its own.
             return self.resolve(views, chord, key);
+        }
+        if pressed.mods.contains(KeyModifiers::SHIFT) {
+            // A Shift-arrow nothing here binds moves as the plain arrow does.
+            let plain = KeyEvent::new(key.code, key.modifiers.difference(KeyModifiers::SHIFT));
+            return self.resolve(views, chord, plain);
         }
         Resolved::Unbound
     }
