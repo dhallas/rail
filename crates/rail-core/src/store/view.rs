@@ -174,6 +174,9 @@ impl fmt::Debug for BodyState {
 /// An attachment's listing data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttachmentView {
+    /// The provider's own id for this part, which names it to `attachment.save` and
+    /// `attachment.open`.
+    pub part_id: String,
     pub filename: String,
     pub mime_type: String,
     pub size: i64,
@@ -553,10 +556,38 @@ impl Store {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
+    /// Every attachment the store lists for that account's message, in `attachments.id`
+    /// order; empty when the account has no such message. The only source of a part's
+    /// filename, type and size for `attachment.save` and `attachment.open`: Graph's `$value`
+    /// answers bytes with no metadata.
+    ///
+    /// # Errors
+    /// The store could not be read.
+    pub fn listed_attachments(
+        &self,
+        account_id: i64,
+        remote: &str,
+    ) -> Result<Vec<AttachmentView>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT a.remote_part_id, a.filename, a.mime_type, a.size
+             FROM attachments a JOIN messages m ON m.id = a.message_id
+             WHERE m.account_id = ?1 AND m.remote_id = ?2 ORDER BY a.id",
+        )?;
+        let rows = stmt.query_map(params![account_id, remote], |r| {
+            Ok(AttachmentView {
+                part_id: r.get(0)?,
+                filename: r.get(1)?,
+                mime_type: r.get(2)?,
+                size: r.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
     fn attach(&self, messages: &mut [MessageView]) -> Result<(), StoreError> {
         let ids: Vec<i64> = messages.iter().map(|m| m.id).collect();
         let mut stmt = self.conn.prepare(
-            "SELECT message_id, filename, mime_type, size FROM attachments
+            "SELECT message_id, remote_part_id, filename, mime_type, size FROM attachments
              WHERE message_id IN (SELECT value FROM json_each(?1)) ORDER BY id",
         )?;
         let mut by_message: HashMap<i64, Vec<AttachmentView>> = HashMap::new();
@@ -564,9 +595,10 @@ impl Store {
             Ok((
                 r.get::<_, i64>(0)?,
                 AttachmentView {
-                    filename: r.get(1)?,
-                    mime_type: r.get(2)?,
-                    size: r.get(3)?,
+                    part_id: r.get(1)?,
+                    filename: r.get(2)?,
+                    mime_type: r.get(3)?,
+                    size: r.get(4)?,
                 },
             ))
         })?;

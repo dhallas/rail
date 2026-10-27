@@ -16,6 +16,12 @@ pub mod wire;
 #[cfg(test)]
 mod action_tests;
 #[cfg(test)]
+mod attachments_content_tests;
+#[cfg(test)]
+mod attachments_dest_tests;
+#[cfg(test)]
+mod attachments_tests;
+#[cfg(test)]
 mod body_tests;
 #[cfg(test)]
 mod connect_build_tests;

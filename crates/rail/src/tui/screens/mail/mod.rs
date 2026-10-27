@@ -5,6 +5,7 @@
 
 mod actions;
 mod actions_pick;
+mod attachments;
 mod bulk;
 mod clock_toggle;
 mod composing;
@@ -49,6 +50,7 @@ mod view;
 mod view_tests;
 
 use std::cell::Cell;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crossterm::event::KeyEvent;
@@ -78,7 +80,7 @@ use crate::tui::data::{DaemonLink, ListRequest, MailEvent, ScopeChoice, StoreRea
 use crate::tui::effects::Opener;
 use crate::tui::keys::{Action, Chord, Keymap, Resolved, View};
 use crate::tui::modals::{FilterLine, Help, Modal, Palette};
-use crate::tui::open::{OpenFiles, older_than, sweep_dir};
+use crate::tui::open::{OpenFiles, OpenedAttachments, older_than, sweep_dir};
 use crate::tui::screen::Screen;
 use crate::tui::screens::compose::Composer;
 use crate::tui::screens::reader::Reader;
@@ -125,6 +127,10 @@ pub struct MailContext {
     /// Each account's signature (in `config.toml`'s order): the file's text, why it could not
     /// be read, or `None` when none is set.
     pub signatures: Vec<Option<Result<String, String>>>,
+    /// Where `s`, `S` and `w` save attachments, resolved once at startup from
+    /// `[general] attachment_dir` and the user's download directory. `None` means neither
+    /// answered, and the three keys say so instead of sending anything.
+    pub attachment_dir: Option<PathBuf>,
 }
 
 /// One configured account, in `config.toml`'s order.
@@ -238,6 +244,11 @@ pub struct MailScreen {
     open_files: OpenFiles,
     /// The browser confirmation was answered yes this session.
     html_confirmed: bool,
+    /// What the attachment keys are waiting on.
+    attachment: attachments::AttachmentState,
+    /// The copies `attachment.open` wrote this session, removed `OPENED_GRACE` after the reader
+    /// closes (on a later tick) and at once on drop, so quitting takes them too.
+    opened_attachments: OpenedAttachments,
     /// The message `o` is waiting on a body fetch for.
     pending_open: Option<i64>,
     /// The message being written, drawn between the header and the hint bar.
@@ -306,6 +317,8 @@ impl MailScreen {
             show_clock,
             open_files,
             html_confirmed: false,
+            attachment: attachments::AttachmentState::default(),
+            opened_attachments: OpenedAttachments::default(),
             pending_open: None,
             compose: None,
             composing: composing::ComposeState::default(),
@@ -641,6 +654,7 @@ impl Screen for MailScreen {
             Msg::Tick => {
                 self.tick = self.tick.wrapping_add(1);
                 self.status.tick(self.tick);
+                self.opened_attachments.expire(self.tick);
                 Vec::new()
             }
             Msg::Resize(..) => Vec::new(),

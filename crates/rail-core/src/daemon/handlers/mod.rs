@@ -1,6 +1,11 @@
 //! Every operation the daemon serves.
 
 mod actions;
+pub(super) mod attachments;
+#[cfg(all(test, target_os = "macos"))]
+mod attachments_quarantine_tests;
+#[cfg(test)]
+mod attachments_sweep_tests;
 mod body;
 pub(super) mod draft_files;
 mod drafts;
@@ -50,5 +55,7 @@ pub(crate) fn registry() -> Registry {
     registry.register::<op::DraftImport, _, _>(drafts_gmail::import);
     registry.register::<op::SnoozeSet, _, _>(snooze::set);
     registry.register::<op::SnoozeClear, _, _>(snooze::clear);
+    registry.register::<op::AttachmentSave, _, _>(attachments::save);
+    registry.register::<op::AttachmentOpen, _, _>(attachments::open);
     registry
 }

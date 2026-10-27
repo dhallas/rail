@@ -2,6 +2,7 @@
 //! the store, read on blocking tasks (`StoreReader`), and the daemon (`DaemonLink`). Debounce
 //! timers are jobs too, so nothing runs while nothing happens.
 
+mod attachments_link;
 #[cfg(test)]
 mod bulk_tests;
 mod daemon_link;
@@ -17,8 +18,9 @@ use futures_util::FutureExt;
 
 use rail_core::ops::{
     AccountSyncStatus, ActionApplyResponse, ActionFailed, ActionRetryResponse, ActionUndoResponse,
-    BodyFetchResponse, DraftId, DraftImportResponse, DraftPushResponse, DraftSaveResponse,
-    DraftSendResponse, OpError, OutboxId, SnoozeClearResponse, SnoozeWoke,
+    AttachmentOpenResponse, AttachmentSaveResponse, BodyFetchResponse, DraftId,
+    DraftImportResponse, DraftPushResponse, DraftSaveResponse, DraftSendResponse, OpError,
+    OutboxId, SnoozeClearResponse, SnoozeWoke,
 };
 use rail_core::provider::Mailbox;
 use rail_core::store::AddressEntry;
@@ -61,6 +63,15 @@ pub enum DaemonEvent {
     Refreshed(Result<(), OpError>),
     /// A snooze put threads back in the inbox (`snooze.woke`).
     Woke(SnoozeWoke),
+}
+
+/// Why an `Enter` on an attachment became a save, carried with the save so its line says so.
+#[derive(Clone, PartialEq, Eq)]
+pub enum NotOpened {
+    /// A type outside the open list: the sender's declared type, drawn escaped.
+    Type(String),
+    /// The daemon found the bytes are not what the declared type says (#107).
+    Contents,
 }
 
 /// One answer to the mail screen.
@@ -221,6 +232,29 @@ pub enum MailEvent {
     WokeRead {
         count: usize,
         subject: Result<Option<String>, ReadError>,
+    },
+    /// `attachment.save` answered. `account` lets the screen name the provider in a
+    /// `Missing` line; `dir` is what the status line says the files landed in; `single` is
+    /// true when one part was asked for (`s` or an `Enter` Rail would not open), which is what
+    /// the log says about the save. `name` is the file that save asked for, when it was one,
+    /// and `unopenable` why an `Enter` did not open it when that turned into a save (FR-6,
+    /// #107): both travel with the answer, so two saves in flight never cross their lines.
+    AttachmentSaved {
+        result: Result<AttachmentSaveResponse, OpError>,
+        account: String,
+        dir: String,
+        single: bool,
+        name: Option<String>,
+        unopenable: Option<NotOpened>,
+    },
+    /// `attachment.open` answered; `filename` names the part in a failure's line, and
+    /// `message` and `part_id` say which part to save when the daemon would not open it.
+    AttachmentOpened {
+        result: Result<AttachmentOpenResponse, OpError>,
+        account: String,
+        message: String,
+        part_id: String,
+        filename: String,
     },
 }
 
@@ -415,6 +449,21 @@ impl fmt::Debug for MailEvent {
                 .debug_struct("WokeRead")
                 .field("count", count)
                 .field("ok", &subject.is_ok())
+                .finish(),
+            // Never `dir`, `name`, `unopenable` or `account`: a sender-chosen name or type
+            // and a user's own directory must not reach a log.
+            Self::AttachmentSaved { result, single, .. } => f
+                .debug_struct("AttachmentSaved")
+                .field("ok", &result.is_ok())
+                .field("single", single)
+                .field(
+                    "results",
+                    &result.as_ref().map_or(0, |answer| answer.results.len()),
+                )
+                .finish(),
+            Self::AttachmentOpened { result, .. } => f
+                .debug_struct("AttachmentOpened")
+                .field("ok", &result.is_ok())
                 .finish(),
         }
     }

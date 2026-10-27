@@ -72,11 +72,12 @@ impl std::fmt::Debug for SaveCall {
 
 #[derive(Clone)]
 pub struct DaemonLink {
-    link: Link,
+    /// Shared with `attachments_link`, which holds the two attachment calls.
+    pub(super) link: Link,
 }
 
 #[derive(Clone)]
-enum Link {
+pub(super) enum Link {
     Daemon(Connector),
     #[cfg(test)]
     Fake(std::sync::Arc<FakeDaemon>),
@@ -454,6 +455,22 @@ pub struct FakeDaemon {
         std::collections::VecDeque<Result<rail_core::ops::SnoozeClearResponse, OpError>>,
     >,
     pub next_draft: std::sync::atomic::AtomicI64,
+    /// The answer to the next `attachment.save`; every requested part `Saved` into `dir`
+    /// under its own name when unset.
+    pub save_answer:
+        std::sync::Mutex<Option<Result<rail_core::ops::AttachmentSaveResponse, OpError>>>,
+    /// The answer to the next `attachment.open`. Unset: `<open_dir>/fake-<n>/<filename>`,
+    /// **created** as an empty 0600 file in a 0700 directory, as the daemon would, so a test
+    /// can see it removed.
+    pub open_answer:
+        std::sync::Mutex<Option<Result<rail_core::ops::AttachmentOpenResponse, OpError>>>,
+    /// The directory the default `attachment.open` answer writes under. `FakeDaemon` holds no
+    /// `Paths` and `attachment_open` carries no directory, so unset — and with no
+    /// `open_answer` — the fake answers `Err(OpError::internal("open_dir unset"))`.
+    pub open_dir: std::sync::Mutex<Option<std::path::PathBuf>>,
+    /// Numbers the token directories the default `attachment.open` answer writes, so two
+    /// opens never share one.
+    pub next_token: std::sync::atomic::AtomicI64,
 }
 
 #[cfg(test)]
@@ -509,11 +526,22 @@ pub enum FakeCall {
         account: String,
         threads: Vec<i64>,
     },
+    AttachmentSave {
+        account: String,
+        message_id: String,
+        part_ids: Vec<String>,
+        dir: String,
+    },
+    AttachmentOpen {
+        account: String,
+        message_id: String,
+        part_id: String,
+    },
 }
 
 #[cfg(test)]
 impl FakeDaemon {
-    fn record(&self, call: FakeCall) {
+    pub(super) fn record(&self, call: FakeCall) {
         self.calls.lock().unwrap().push(call);
     }
 

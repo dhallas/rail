@@ -222,6 +222,7 @@ impl MailScreen {
             ReaderOutcome::Back => return self.close_reader(),
             ReaderOutcome::FollowLink => self.follow_link(),
             ReaderOutcome::Attachments => self.attachments(),
+            ReaderOutcome::SaveAttachments => return self.save_cursor_attachments(),
             ReaderOutcome::OpenBrowser => return self.open_html(),
         }
         Vec::new()
@@ -234,6 +235,7 @@ impl MailScreen {
         self.reader = None;
         self.modal = None;
         self.open_files.remove_all();
+        self.opened_attachments.close(self.tick);
         self.pending_open = None;
         // An answer to a read still in flight must not reopen the thread.
         self.latest_thread = self.next_seq();
@@ -443,15 +445,23 @@ impl MailScreen {
         let Some(reader) = self.reader.as_ref() else {
             return;
         };
-        let rows: Vec<AttachmentRow> = reader
-            .detail()
+        let detail = reader.detail();
+        let account = self.account_name(detail.account_id).unwrap_or_default();
+        let rows: Vec<AttachmentRow> = detail
             .messages
             .iter()
-            .flat_map(|m| m.attachments.iter())
-            .map(|a| AttachmentRow {
-                name: a.filename.clone(),
-                mime_type: a.mime_type.clone(),
-                size: a.size,
+            .enumerate()
+            .flat_map(|(index, m)| {
+                let account = account.clone();
+                m.attachments.iter().map(move |a| AttachmentRow {
+                    account: account.clone(),
+                    message: m.remote_id.clone(),
+                    part_id: a.part_id.clone(),
+                    name: a.filename.clone(),
+                    mime_type: a.mime_type.clone(),
+                    size: a.size,
+                    message_index: index,
+                })
             })
             .collect();
         if rows.is_empty() {
@@ -459,43 +469,58 @@ impl MailScreen {
                 .notify("No attachments in this thread.", self.tick);
             return;
         }
-        self.modal = Some(Modal::Attachments(AttachmentList::new(rows)));
+        self.modal = Some(Modal::Attachments(AttachmentList::new(
+            rows,
+            self.ctx.icons,
+        )));
     }
 
     pub(super) fn modal_outcome(&mut self, outcome: ModalOutcome) -> Vec<Effect> {
         match outcome {
-            ModalOutcome::Stay => {}
-            ModalOutcome::Close => return self.close_modal(),
-            ModalOutcome::Preview(Command::Theme(index)) => return self.preview_theme(index),
-            ModalOutcome::Preview(Command::Accent(accent)) => return self.preview_accent(accent),
-            ModalOutcome::Preview(_) => {}
-            ModalOutcome::Run(Command::Theme(index)) => return self.keep_scheme(index),
-            ModalOutcome::Run(Command::Accent(answer)) => return self.keep_accent(answer),
+            ModalOutcome::Close => self.close_modal(),
+            ModalOutcome::Preview(Command::Theme(index)) => self.preview_theme(index),
+            ModalOutcome::Preview(Command::Accent(accent)) => self.preview_accent(accent),
+            // The modal keeps the key, and only the two pickers above preview anything.
+            ModalOutcome::Stay | ModalOutcome::Preview(_) => Vec::new(),
             ModalOutcome::Typed(text) => {
                 self.filter_text = text;
                 self.filter_token += 1;
-                return vec![timer(FILTER_DEBOUNCE, self.filter_token, Timer::Filter)];
+                vec![timer(FILTER_DEBOUNCE, self.filter_token, Timer::Filter)]
             }
-            ModalOutcome::Run(Command::ClearFilter) => {
+            ModalOutcome::Run(command) => self.run_command(command),
+        }
+    }
+
+    /// A modal answered with a command. Each arm closes the modal itself rather than one clear
+    /// up here: the theme and accent arms close it where they write what was kept, and the
+    /// attachment arms read which modal was open before it goes.
+    fn run_command(&mut self, command: Command) -> Vec<Effect> {
+        match command {
+            Command::Theme(index) => return self.keep_scheme(index),
+            Command::Accent(answer) => return self.keep_accent(answer),
+            Command::OpenAttachment(_)
+            | Command::SaveAttachment(_)
+            | Command::SaveAllAttachments(_) => return self.attachment_command(command),
+            Command::ClearFilter => {
                 self.modal = None;
                 self.filter_text.clear();
                 self.filter_token += 1;
                 return self.apply_filter();
             }
-            ModalOutcome::Run(Command::Palette(target)) => {
+            Command::Palette(target) => {
                 self.modal = None;
                 return self.run_palette(target);
             }
-            ModalOutcome::Run(Command::ChooseLink { links, number }) => {
+            Command::ChooseLink { links, number } => {
                 self.modal = None;
                 self.confirm_link(&links, number);
             }
-            ModalOutcome::Run(Command::OpenHtml(message_id)) => {
+            Command::OpenHtml(message_id) => {
                 self.modal = None;
                 self.html_confirmed = true;
                 return vec![self.ctx.store.html(message_id)];
             }
-            ModalOutcome::Run(Command::OpenLink(url)) => {
+            Command::OpenLink(url) => {
                 self.modal = None;
                 if let Err(error) = (self.ctx.opener)(&url) {
                     tracing::warn!(error = %error, "could not start the browser");
@@ -506,7 +531,7 @@ impl MailScreen {
                     self.status.error(text, self.ctx.clock.now(), self.tick);
                 }
             }
-            ModalOutcome::Run(command) => {
+            command => {
                 self.modal = None;
                 return self.action_command(command);
             }
