@@ -35,6 +35,9 @@ mod sidebar_tree;
 #[cfg(test)]
 mod sidebar_tree_tests;
 mod sidebar_view;
+mod snooze_flow;
+#[cfg(test)]
+mod snooze_tests;
 mod status;
 #[cfg(test)]
 mod tests;
@@ -623,6 +626,7 @@ impl Screen for MailScreen {
         if self.ctx.depth == ColorDepth::Ansi && self.themes.current.scheme.is_some() {
             self.status.notify(themes::NEEDS_TRUECOLOR, self.tick);
         }
+        self.load_last_snooze();
         vec![
             self.ctx.link.watch(),
             self.read_list(PageAt::First, Place::Top),

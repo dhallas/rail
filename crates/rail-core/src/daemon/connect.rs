@@ -26,9 +26,11 @@ use crate::paths::{Paths, canonical_dir, create_private_dir};
 /// run, or are `action.apply` and `draft.send` (the client token finds the row a first try
 /// made), `draft.save` (the token finds the draft a first create made; an update writes the
 /// same draft again), `draft.push` (the token finds the row; a second push folds into it),
-/// `draft.import` (a second import answers the draft the first made), `action.undo`,
-/// `action.retry` and `draft.discard`.
-const RETRY_SAFE: [&str; 20] = [
+/// `draft.import` (a second import answers the draft the first made), `snooze.set` (the token
+/// finds the archive a first try made; a snooze already held only takes the time again),
+/// `snooze.clear` (a thread back already is left alone), `action.undo`, `action.retry` and
+/// `draft.discard`.
+const RETRY_SAFE: [&str; 22] = [
     names::STATUS,
     names::ACCOUNTS_LIST,
     names::PRESETS_LIST,
@@ -49,6 +51,8 @@ const RETRY_SAFE: [&str; 20] = [
     names::DRAFT_DISCARD,
     names::DRAFT_PUSH,
     names::DRAFT_IMPORT,
+    names::SNOOZE_SET,
+    names::SNOOZE_CLEAR,
 ];
 
 /// True when `operation` may be sent again on a fresh connection.

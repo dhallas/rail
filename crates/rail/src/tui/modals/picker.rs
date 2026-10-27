@@ -2,6 +2,7 @@
 //! applies the difference from what the threads carried), `m` moves to one (`Enter`), `:theme`
 //! and `:accent` preview the highlighted choice on every move (`Enter` keeps it, `Esc` restores).
 //! Typing filters with the palette's fuzzy matcher; names are outside text, escaped when drawn.
+//! The snooze chooser (`h`) shows each choice's time, and offers a typed time as its first row.
 
 use std::collections::BTreeSet;
 
@@ -15,7 +16,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use super::{Command, ModalOutcome, boxed};
-use crate::tui::text::{escape, input_row, pad, width};
+use crate::tui::clock::Clock;
+use crate::tui::snooze::{SnoozeChoice, ahead, parse_snooze};
+use crate::tui::text::{count, escape, input_row, pad, pad_left, width};
 use crate::tui::theme::Theme;
 use crate::tui::theme::choice::Accent;
 use crate::tui::widgets::text_input::TextInput;
@@ -31,6 +34,16 @@ const PREVIEW_HINT: &str = "Enter keeps · Esc restores · ↑↓ move";
 /// The theme picker's hint on a terminal that cannot show a scheme.
 pub(crate) const NO_PREVIEW_HINT: &str =
     "Enter keeps · Esc cancels · ↑↓ move · no preview without truecolor";
+/// The snooze chooser's hint: plain ASCII, as it draws in either icon set.
+const SNOOZE_HINT: &str = "Type a time or pick one. Enter snoozes, Esc cancels.";
+/// The `id` of the snooze chooser's row that puts snoozed threads back now; a time's row has
+/// the time.
+pub const RETURN_NOW: i64 = 0;
+const RETURN_LABEL: &str = "Return to inbox now";
+/// The label of the row offering the last typed time again.
+const LAST_LABEL: &str = "Last used";
+/// The label of the row a typed time makes.
+const TYPED_LABEL: &str = "At";
 
 /// `:accent`'s answer: the scheme's own accent or one of its sixteen slots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +76,8 @@ pub enum PickerKind {
     Account,
     /// A draft to open in the composer (`id`: the draft's).
     Draft,
+    /// When to snooze threads until (`id`: the time, Unix seconds; `RETURN_NOW`: back now).
+    Snooze,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -110,6 +125,44 @@ pub struct Picker {
     selected: usize,
     /// A `Theme` or `Accent` picker previews its highlight unless told not to.
     preview: bool,
+    /// A snooze chooser's clock, title and typed time.
+    snooze: Option<SnoozeParts>,
+}
+
+/// What a snooze chooser adds to a picker: the clock its times are read and written by, when
+/// the threads are snoozed until (its title), and what the typed text reads as (`None` while
+/// nothing is typed).
+struct SnoozeParts {
+    clock: Clock,
+    /// How many threads the chooser snoozes: its title counts more than one.
+    threads: usize,
+    until: Option<i64>,
+    reading: Option<Result<i64, &'static str>>,
+}
+
+impl SnoozeParts {
+    /// A snooze row: the label, then its time right-aligned in the clock's column with a space
+    /// before it. The time is muted but on the cursor row, which is `selected` throughout.
+    fn line(
+        &self,
+        label: &str,
+        at: Option<i64>,
+        selected: bool,
+        theme: &Theme,
+        cols: usize,
+    ) -> Line<'static> {
+        let (style, muted) = if selected {
+            (theme.selected, theme.selected)
+        } else {
+            (theme.text, theme.muted)
+        };
+        let label_cols = cols.saturating_sub(self.clock.ahead_cols() + 1);
+        let time = at.map(|at| self.clock.ahead(at)).unwrap_or_default();
+        Line::from(vec![
+            Span::styled(pad(&escape(label), label_cols), style),
+            Span::styled(pad_left(&time, cols.saturating_sub(label_cols)), muted),
+        ])
+    }
 }
 
 impl Picker {
@@ -125,11 +178,48 @@ impl Picker {
             shown,
             selected: 0,
             preview: true,
+            snooze: None,
         };
         if matches!(kind, PickerKind::Theme | PickerKind::Accent) {
             // The active choice is highlighted.
             picker.selected = picker.items.iter().position(|i| i.checked).unwrap_or(0);
         }
+        picker
+    }
+
+    /// The snooze chooser for `threads` threads: "Return to inbox now" first when `snoozed`, then
+    /// the last typed time (`last`, unless a choice offers the same), then `choices`. Its title
+    /// says until when the one thread is snoozed (`until`), or how many threads it snoozes, and a
+    /// typed time is offered first.
+    pub fn snooze(
+        choices: &[SnoozeChoice],
+        clock: Clock,
+        (threads, until, snoozed): (usize, Option<i64>, bool),
+        last: Option<i64>,
+    ) -> Self {
+        let back = snoozed.then_some((RETURN_NOW, RETURN_LABEL));
+        let last = last
+            .filter(|at| choices.iter().all(|c| c.at != *at))
+            .map(|at| (at, LAST_LABEL));
+        let rows = back
+            .into_iter()
+            .chain(last)
+            .chain(choices.iter().map(|c| (c.at, c.label)));
+        let items = rows
+            .map(|(id, name)| PickerItem {
+                id,
+                name: name.to_string(),
+                checked: false,
+                swatch: Vec::new(),
+            })
+            .collect();
+        let mut picker = Self::new(PickerKind::Snooze, items);
+        picker.snooze = Some(SnoozeParts {
+            clock,
+            threads,
+            until,
+            reading: None,
+        });
         picker
     }
 
@@ -143,6 +233,14 @@ impl Picker {
     #[cfg(test)]
     pub(crate) fn names(&self) -> Vec<&str> {
         self.items.iter().map(|i| i.name.as_str()).collect()
+    }
+
+    /// Moves a snooze chooser's clock (tests: a chooser keeps the clock it was opened with).
+    #[cfg(test)]
+    pub(crate) fn set_now(&mut self, now: i64) {
+        if let Some(parts) = self.snooze.as_mut() {
+            parts.clock.set_now(now);
+        }
     }
 
     /// Moving the highlight shows nothing, and the hint says why (a theme on a terminal
@@ -172,14 +270,37 @@ impl Picker {
                 .map(|(candidate, _)| candidate.index)
                 .collect()
         };
+        if let Some(parts) = self.snooze.as_mut() {
+            parts.reading = (!query.trim().is_empty()).then(|| parse_snooze(query, &parts.clock));
+        }
         self.selected = 0;
+    }
+
+    /// The typed time, when a snooze chooser's text reads as one: its row comes first, unless a
+    /// choice still shown already offers that time (`tomorrow` typed is the Tomorrow row).
+    fn typed(&self) -> Option<i64> {
+        let at = self.snooze.as_ref()?.reading?.ok()?;
+        let offered = self
+            .shown
+            .iter()
+            .any(|&i| self.items.get(i).is_some_and(|c| c.id == at));
+        (!offered).then_some(at)
+    }
+
+    /// The rows before the matching items: the typed time's, if any.
+    fn lead(&self) -> usize {
+        usize::from(self.typed().is_some())
     }
 
     /// The highlighted item's command, for the kinds that choose one item.
     fn choice(&self) -> Option<Command> {
+        if let Some(at) = self.typed().filter(|_| self.selected == 0) {
+            let said = Some(self.input.value().trim().to_string());
+            return Some(Command::Snooze { until: at, said });
+        }
         let item = self
             .shown
-            .get(self.selected)
+            .get(self.selected.checked_sub(self.lead())?)
             .and_then(|&i| self.items.get(i))?;
         match self.kind {
             PickerKind::Labels => None,
@@ -193,12 +314,20 @@ impl Picker {
             )),
             PickerKind::Account => usize::try_from(item.id).ok().map(Command::Account),
             PickerKind::Draft => usize::try_from(item.id).ok().map(Command::DraftRow),
+            PickerKind::Snooze if item.id == RETURN_NOW => Some(Command::SnoozeReturn),
+            PickerKind::Snooze => Some(Command::Snooze {
+                until: item.id,
+                said: None,
+            }),
         }
     }
 
-    fn enter(&self) -> ModalOutcome {
+    fn enter(&mut self) -> ModalOutcome {
         if self.kind != PickerKind::Labels {
-            return self.choice().map_or(ModalOutcome::Stay, ModalOutcome::Run);
+            return match self.choice() {
+                Some(command) => self.still_ahead(command),
+                None => ModalOutcome::Stay,
+            };
         }
         let now: BTreeSet<i64> = self
             .items
@@ -212,6 +341,24 @@ impl Picker {
         })
     }
 
+    /// A snooze's time asked again at Enter, since the clock has moved on since it was shown: the
+    /// time shown is sent, unless it has become too soon. Then the chooser says why and shows no
+    /// rows, so a second Enter sends nothing until the text changes.
+    fn still_ahead(&mut self, command: Command) -> ModalOutcome {
+        let (Command::Snooze { until, .. }, Some(parts)) = (&command, self.snooze.as_mut()) else {
+            return ModalOutcome::Run(command);
+        };
+        match ahead(*until, parts.clock.now()) {
+            Ok(_) => ModalOutcome::Run(command),
+            Err(why) => {
+                parts.reading = Some(Err(why));
+                self.shown.clear();
+                self.selected = 0;
+                ModalOutcome::Stay
+            }
+        }
+    }
+
     /// After the highlight may have moved: a preview of it in the kinds that preview.
     fn moved(&self) -> ModalOutcome {
         if !self.previews() {
@@ -223,7 +370,7 @@ impl Picker {
 
     fn step(&mut self, down: bool) -> ModalOutcome {
         self.selected = if down {
-            (self.selected + 1).min(self.shown.len().saturating_sub(1))
+            (self.selected + 1).min((self.lead() + self.shown.len()).saturating_sub(1))
         } else {
             self.selected.saturating_sub(1)
         };
@@ -290,6 +437,15 @@ impl Picker {
                 "Enter opens · Esc cancels · ↑↓ move",
                 "No draft matches.",
             ),
+            PickerKind::Snooze => (
+                "Snooze until",
+                SNOOZE_HINT,
+                self.snooze
+                    .as_ref()
+                    .and_then(|s| s.reading)
+                    .and_then(Result::err)
+                    .unwrap_or("No time matches."),
+            ),
         }
     }
 
@@ -316,8 +472,39 @@ impl Picker {
         Line::from(spans)
     }
 
+    /// The box's title: the kind's; a snooze chooser's says until when its one thread is
+    /// snoozed, or how many threads it snoozes ("Snooze 120 threads until").
+    fn title(&self) -> String {
+        match &self.snooze {
+            Some(SnoozeParts {
+                until: Some(until),
+                clock,
+                ..
+            }) => format!("Snoozed until {}", clock.long(*until)),
+            Some(s) if s.threads > 1 => format!("Snooze {} threads until", count(s.threads)),
+            _ => self.words().0.to_string(),
+        }
+    }
+
+    /// Row `row`: the typed time's first, then the matching items.
+    fn line(&self, row: usize, theme: &Theme, cols: usize) -> Option<Line<'static>> {
+        let selected = row == self.selected;
+        let Some(index) = row.checked_sub(self.lead()) else {
+            let parts = self.snooze.as_ref()?;
+            return Some(parts.line(TYPED_LABEL, self.typed(), selected, theme, cols));
+        };
+        let item = self.items.get(*self.shown.get(index)?)?;
+        if let Some(parts) = &self.snooze {
+            let at = (item.id != RETURN_NOW).then_some(item.id);
+            return Some(parts.line(&item.name, at, selected, theme, cols));
+        }
+        let style = if selected { theme.selected } else { theme.text };
+        Some(self.row(item, style, cols))
+    }
+
     pub(super) fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        let (title, hint, empty) = self.words();
+        let (_, hint, empty) = self.words();
+        let title = self.title();
         let height = u16::try_from(SHOWN + 5).unwrap_or(u16::MAX);
         // Wide enough for the hint and its border.
         let hint_width = u16::try_from(width(hint) + 2).unwrap_or(u16::MAX);
@@ -326,25 +513,20 @@ impl Picker {
             area,
             PICKER_WIDTH.max(hint_width),
             height,
-            title,
+            &title,
             theme,
         );
         let cols = usize::from(inner.width);
         let (typed, column) = input_row("> ", self.input.value(), self.input.cursor(), cols);
         let mut lines = vec![Line::styled(typed, theme.accent), Line::default()];
         let first = (self.selected + 1).saturating_sub(SHOWN);
-        for (row, &index) in self.shown.iter().enumerate().skip(first).take(SHOWN) {
-            let Some(item) = self.items.get(index) else {
-                continue;
-            };
-            let style = if row == self.selected {
-                theme.selected
-            } else {
-                theme.text
-            };
-            lines.push(self.row(item, style, cols));
-        }
-        if self.shown.is_empty() {
+        let rows = self.lead() + self.shown.len();
+        lines.extend(
+            (first..rows)
+                .take(SHOWN)
+                .filter_map(|row| self.line(row, theme, cols)),
+        );
+        if rows == 0 {
             lines.push(Line::styled(empty, theme.muted));
         }
         // The hint stays on the last inside row however many items there are.

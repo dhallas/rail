@@ -28,6 +28,17 @@ mod outbox_tests;
 mod rollup;
 #[cfg(test)]
 mod search_text_tests;
+pub mod snoozes;
+#[cfg(test)]
+mod snoozes_edge_tests;
+#[cfg(test)]
+mod snoozes_return_tests;
+#[cfg(test)]
+mod snoozes_single_tests;
+#[cfg(test)]
+mod snoozes_tests;
+#[cfg(test)]
+mod snoozes_view_tests;
 pub mod sync_read;
 mod sync_write;
 #[cfg(test)]
@@ -263,6 +274,8 @@ mod tests {
             "addresses",
             "outbox",
             "messages_fts",
+            "snoozes",
+            "snooze_messages",
         ] {
             assert!(
                 names.iter().any(|n| n == expected),

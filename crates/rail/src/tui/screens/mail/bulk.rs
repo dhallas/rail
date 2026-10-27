@@ -18,8 +18,9 @@ use crate::tui::keys::Action;
 use crate::tui::modals::{Command, Confirm};
 use crate::tui::text::{escape, fit};
 
-/// Characters of the one trashed thread's subject the question shows.
-const SHOWN_SUBJECT_CHARS: usize = 120;
+/// Characters of one thread's subject that a question or notice shows: the trash question's,
+/// and "Back from snooze".
+pub(super) const SHOWN_SUBJECT_CHARS: usize = 120;
 
 /// Threads one bulk select takes at most: ~50 `action.apply` chunks and ~1 undo chunk per
 /// account, about 300 KB of ids and flags.
@@ -82,6 +83,7 @@ pub(super) fn title(action: &MailAction) -> &'static str {
         MailAction::Send { .. } => "Send?",
         MailAction::PushDraft { .. } => "Save the draft?",
         MailAction::DeleteDraft { .. } => "Discard the draft?",
+        MailAction::Unsnooze { .. } => "Return to the inbox?",
     }
 }
 
@@ -101,6 +103,7 @@ pub(super) fn question(action: &MailAction, count: usize) -> String {
         MailAction::Send { .. } => format!("Send {n} messages?"),
         MailAction::PushDraft { .. } => format!("Save {n} drafts?"),
         MailAction::DeleteDraft { .. } => format!("Discard {n} drafts?"),
+        MailAction::Unsnooze { .. } => format!("Return {n} threads to the inbox?"),
     }
 }
 

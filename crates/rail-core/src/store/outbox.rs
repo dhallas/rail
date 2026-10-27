@@ -11,6 +11,7 @@ use rusqlite::{OptionalExtension, Row, Transaction, TransactionBehavior, params}
 use super::apply_local::{self, Prior};
 use super::drafts::{DraftSaved, DraftWrite, ListedFile};
 use super::outbox_drafts::{draft_remote, draft_write, enqueue_draft, insert_delete_draft};
+use super::snoozes::{self, SnoozeNew};
 use super::{Store, StoreError, rollup};
 use crate::ops::{Action, DraftId, OutboxId, RowToken};
 use crate::provider::DraftIds;
@@ -141,6 +142,17 @@ pub enum OutboxWrite {
         remote_message_id: String,
         client_token: String,
     },
+    /// Snooze threads: archive them now and record when they go back (`store::snoozes`).
+    Snooze(SnoozeNew),
+    /// Put these threads' snoozes back now.
+    Unsnooze {
+        account_id: i64,
+        threads: Vec<i64>,
+    },
+    /// Put back every snooze of the account due by now.
+    Wake {
+        account_id: i64,
+    },
 }
 
 /// What `draft.discard`'s delete did.
@@ -186,6 +198,19 @@ pub enum OutboxOutcome {
     Recovered(Vec<OutboxId>),
     DraftSaved(DraftSaved),
     DraftDeleted(DraftDeleteOutcome),
+    /// The archive's rows (none when every thread was snoozed already) and how many threads are
+    /// snoozed now.
+    Snoozed {
+        rows: Vec<OutboxId>,
+        snoozed: usize,
+    },
+    Unsnoozed {
+        returned: usize,
+    },
+    /// The threads (the store's ids) a wake put back.
+    Woke {
+        threads: Vec<i64>,
+    },
 }
 
 const COLUMNS: &str = "id, account_id, payload, thread_ids, state, attempts, not_before, \
@@ -215,7 +240,7 @@ fn read_row(r: &Row<'_>) -> rusqlite::Result<OutboxRow> {
     })
 }
 
-fn one(tx: &Transaction, id: OutboxId) -> Result<Option<OutboxRow>, StoreError> {
+pub(super) fn one(tx: &Transaction, id: OutboxId) -> Result<Option<OutboxRow>, StoreError> {
     Ok(tx
         .query_row(
             &format!("SELECT {COLUMNS} FROM outbox WHERE id = ?1"),
@@ -314,6 +339,7 @@ pub(crate) fn enqueue(
     }
     let remotes = super::action_folders::capture(tx, new.account_id, &new.action)?;
     let reversal = apply_local::apply(tx, new.account_id, &new.action, &threads)?;
+    snoozes::left_inbox(tx, new.account_id, &new.action, &threads)?;
     tx.execute(
         "INSERT INTO outbox (account_id, kind, payload, state, client_token, not_before, thread_ids, reversal, folder_remotes)
          VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8)",
@@ -429,6 +455,7 @@ pub(crate) fn complete(
         )?;
         tx.execute("DELETE FROM drafts WHERE id = ?1", [draft])?;
     }
+    snoozes::archive_sent(tx, id)?;
     tx.execute("DELETE FROM outbox WHERE id = ?1", [id])?;
     Ok(())
 }
@@ -546,7 +573,10 @@ pub(crate) fn retry(
 }
 
 /// Spec §3: a failed row is kept until it is retried or a sync writes server state for one of
-/// its threads. Deletes the account's failed rows on `threads`; how many.
+/// its threads. Deletes the account's failed rows on `threads`; how many. A snooze's failed
+/// return is the exception (#106): the server's state is the very archive it failed to undo, and
+/// nothing else would bring the thread back, so it stays until it is retried, the thread is in
+/// the inbox again by other means, or Rail takes the thread out again (`snoozes::left_inbox`).
 pub(super) fn clear_failed(
     tx: &Transaction,
     account: i64,
@@ -556,9 +586,14 @@ pub(super) fn clear_failed(
         return Ok(0);
     }
     Ok(tx.execute(
-        "DELETE FROM outbox WHERE account_id = ?1 AND state = 'failed'
-           AND EXISTS (SELECT 1 FROM json_each(outbox.thread_ids) t
-                       WHERE t.value IN (SELECT value FROM json_each(?2)))",
+        concat!(
+            "DELETE FROM outbox WHERE account_id = ?1 AND state = 'failed'
+               AND EXISTS (SELECT 1 FROM json_each(outbox.thread_ids) t
+                           WHERE t.value IN (SELECT value FROM json_each(?2)))
+               AND NOT (",
+            snoozes::return_still_owed!("outbox"),
+            ")"
+        ),
         params![account, json(threads)],
     )?)
 }
@@ -619,6 +654,12 @@ impl Store {
             | OutboxWrite::DraftDelete(_)
             | OutboxWrite::CompletePush { .. }
             | OutboxWrite::DraftImport { .. } => draft_write(&tx, write, now)?,
+            OutboxWrite::Snooze(new) => snoozes::snooze(&tx, new, now)?,
+            OutboxWrite::Unsnooze {
+                account_id,
+                threads,
+            } => snoozes::clear(&tx, *account_id, threads, now)?,
+            OutboxWrite::Wake { account_id } => snoozes::wake(&tx, *account_id, now)?,
         };
         tx.commit()?;
         Ok(outcome)

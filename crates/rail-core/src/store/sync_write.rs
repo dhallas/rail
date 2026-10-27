@@ -5,6 +5,7 @@ use std::collections::{BTreeSet, HashSet};
 use rusqlite::types::ToSql;
 use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 
+use super::snoozes::NOT_SNOOZED;
 use super::{Store, StoreError, rollup};
 use crate::provider::{Body, Envelope, Mailbox, Relabel, RemoteFolder, RemoteId};
 use crate::sync::batch::{Batch, BatchOutcome, Origin, Prune, ResumeToken, StateUpdate, Sweep};
@@ -82,8 +83,11 @@ impl Store {
         if let Some(prune) = batch.prune {
             outcome.pruned = prune_old(&tx, account, prune, &mut touched)?;
         }
+        // Before the waiting actions are applied again: a snooze's own archive never hides it.
+        outcome.snoozes_due = incoming_snoozes(&tx, batch, now)?;
         // The conflict rule: actions still waiting for Gmail stay on top of what it said.
         super::apply_local::reapply_live(&tx, account, &touched)?;
+        super::snoozes::settle_woken(&tx, account, &touched)?;
         rollup::refresh(&tx, &touched)?;
         // A thread the rollup deleted leaves the outbox before its rowid can be reused.
         super::apply_local::forget_threads(&tx, &touched)?;
@@ -95,6 +99,15 @@ impl Store {
         tx.commit()?;
         Ok(outcome)
     }
+}
+
+/// Mail the batch put in the inbox brings a snoozed thread back early: how many snoozes that
+/// made due.
+fn incoming_snoozes(tx: &Transaction, batch: &Batch, now: i64) -> Result<usize, StoreError> {
+    let arrived: Vec<&str> = (batch.upserts.iter().map(|e| e.remote_id.as_str()))
+        .chain(batch.relabels.iter().map(|r| r.remote_id.as_str()))
+        .collect();
+    super::snoozes::incoming(tx, batch.account_id, &arrived, now)
 }
 
 fn replace_folders(
@@ -394,8 +407,10 @@ fn sweep_unseen(
     let start = sweep.window_start_ms.unwrap_or(i64::MIN);
     delete_where(
         tx,
-        "account_id = ?1 AND origin = 'sync' AND (synced_at IS NULL OR synced_at < ?2)
-         AND internal_date >= ?3",
+        &format!(
+            "account_id = ?1 AND origin = 'sync' AND (synced_at IS NULL OR synced_at < ?2)
+             AND internal_date >= ?3 AND {NOT_SNOOZED}"
+        ),
         &[&account, &sweep.started_at, &start],
         touched,
     )
@@ -411,9 +426,11 @@ fn prune_old(
     if let Some(start) = prune.window_start_ms {
         pruned += delete_where(
             tx,
-            "account_id = ?1 AND origin = 'sync' AND internal_date < ?2 AND is_starred = 0
-             AND NOT EXISTS (SELECT 1 FROM messages k WHERE k.thread_id = messages.thread_id
-                             AND k.internal_date >= ?2)",
+            &format!(
+                "account_id = ?1 AND origin = 'sync' AND internal_date < ?2 AND is_starred = 0
+                 AND NOT EXISTS (SELECT 1 FROM messages k WHERE k.thread_id = messages.thread_id
+                                 AND k.internal_date >= ?2) AND {NOT_SNOOZED}"
+            ),
             &[&account, &start],
             touched,
         )?;
@@ -421,9 +438,11 @@ fn prune_old(
     let start = prune.window_start_ms.unwrap_or(i64::MIN);
     pruned += delete_where(
         tx,
-        "account_id = ?1 AND origin = 'search' AND COALESCE(searched_at, 0) < ?2 AND is_starred = 0
-         AND NOT EXISTS (SELECT 1 FROM messages k WHERE k.thread_id = messages.thread_id
-                         AND k.internal_date >= ?3)",
+        &format!(
+            "account_id = ?1 AND origin = 'search' AND COALESCE(searched_at, 0) < ?2 AND is_starred = 0
+             AND NOT EXISTS (SELECT 1 FROM messages k WHERE k.thread_id = messages.thread_id
+                             AND k.internal_date >= ?3) AND {NOT_SNOOZED}"
+        ),
         &[&account, &prune.search_before, &start],
         touched,
     )?;
