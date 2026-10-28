@@ -270,6 +270,24 @@ fn rows_open_their_scopes_and_keep_their_keys() {
     );
 }
 
+/// `Inbox/Infrastructure` puts an `Inbox` parent under `More folders`: `Enter` there opens the
+/// account's inbox, while the row keeps its own key and counts only what is under it.
+#[test]
+fn a_system_folders_parent_under_more_folders_opens_that_folder() {
+    let folds = unfolded(&[RowKey::More(acct(1))]);
+    let rows = build(&accounts(), &[], &two_accounts(), &folds);
+    let parent = rows
+        .iter()
+        .find(|r| r.key == prefix(1, "Inbox"))
+        .expect("the Inbox parent");
+    assert_eq!(parent.scope(), Some(ScopeChoice::Account(1)));
+    assert_eq!(
+        parent.count,
+        Some(7),
+        "folded: Infrastructure's sum, not the Inbox's"
+    );
+}
+
 #[test]
 fn a_folded_account_hides_everything_under_it() {
     let mut folds = Folds::default();

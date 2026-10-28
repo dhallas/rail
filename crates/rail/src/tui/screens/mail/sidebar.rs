@@ -102,9 +102,7 @@ impl Sidebar {
     /// The shown row drawn as `scope`'s: the last one with it (an account's Inbox row while the
     /// account is unfolded, its account row while folded).
     pub fn current(&self, scope: &ScopeChoice) -> Option<usize> {
-        self.rows
-            .iter()
-            .rposition(|r| r.scope().as_ref() == Some(scope))
+        self.rows.iter().rposition(|r| r.is_row_of(scope))
     }
 
     /// The first row to draw so row `target` shows in `height` rows; kept for the next frame.
@@ -237,12 +235,7 @@ impl Sidebar {
             self.cursor = Some(self.rows[shown].key.clone());
             return;
         }
-        let Some(row) = self
-            .all
-            .iter()
-            .rev()
-            .find(|r| r.scope().as_ref() == Some(scope))
-        else {
+        let Some(row) = self.all.iter().rev().find(|r| r.is_row_of(scope)) else {
             return;
         };
         let (key, parents) = (row.key.clone(), row.parents.clone());

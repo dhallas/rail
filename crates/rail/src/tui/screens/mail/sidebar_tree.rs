@@ -150,6 +150,12 @@ impl SidebarRow {
         }
     }
 
+    /// Whether this is `scope`'s own row: a prefix named after a system folder opens it, but
+    /// the system folder's row stays the one drawn as it and pointed at.
+    pub fn is_row_of(&self, scope: &ScopeChoice) -> bool {
+        !matches!(self.key, RowKey::Prefix { .. }) && self.scope().as_ref() == Some(scope)
+    }
+
     /// The account the row belongs to.
     #[cfg(test)]
     pub fn account(&self) -> Option<usize> {
@@ -478,8 +484,15 @@ fn more_rows(owner: Owner<'_>, own: &[&FolderCount], folds: &Folds) -> Vec<Sideb
         parents: vec![account.clone()],
         ..row(kind, more.clone(), label, 1, None)
     };
+    let system: Vec<&FolderCount> = own
+        .iter()
+        .copied()
+        .filter(|f| SYSTEM.contains(&kind_of(f)))
+        .collect();
+    let mut tree = Node::tree(&other);
+    tree.link_system(&system);
     let mut rows = vec![rule, head];
-    Node::tree(&other).emit(owner, 2, &[account, more], folds, &mut rows);
+    tree.emit(owner, 2, &[account, more], folds, &mut rows);
     rows
 }
 
@@ -510,6 +523,9 @@ struct Node<'a> {
     name: String,
     path: String,
     folder: Option<&'a FolderCount>,
+    /// The system folder a top-level prefix is named after (`Inbox` of `Inbox/X`): `Enter`
+    /// opens it, while the row keeps its prefix key and counts only what is under it.
+    system: Option<&'a FolderCount>,
     children: Vec<Node<'a>>,
 }
 
@@ -552,6 +568,12 @@ impl<'a> Node<'a> {
             child.folder = Some(folder);
         } else {
             child.insert(rest, folder);
+        }
+    }
+
+    fn link_system(&mut self, system: &[&'a FolderCount]) {
+        for child in self.children.iter_mut().filter(|c| c.folder.is_none()) {
+            child.system = system.iter().copied().find(|f| f.name == child.name);
         }
     }
 
@@ -609,7 +631,10 @@ impl<'a> Node<'a> {
         let kind = RowKind::Parent {
             account: owner.index,
             path: self.path.clone(),
-            scope: self.folder.map(|f| folder_scope(owner.index, f)),
+            scope: self
+                .folder
+                .or(self.system)
+                .map(|f| folder_scope(owner.index, f)),
         };
         SidebarRow {
             foldable: true,

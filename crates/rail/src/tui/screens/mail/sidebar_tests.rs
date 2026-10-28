@@ -174,6 +174,31 @@ fn point_at_unfolds_what_hides_the_scope_and_keeps_a_row_that_already_shows_it()
     );
 }
 
+/// The `Inbox` parent under `More folders` opens the inbox, but the account's own Inbox row
+/// stays the one drawn as it and the one the cursor is sent to.
+#[test]
+fn a_system_folders_parent_opens_it_but_the_system_row_stays_its_row() {
+    let mut s = sidebar();
+    walk_to(&mut s, "AXON");
+    walk_to(&mut s, "More folders (5)");
+    assert_eq!(s.open(), None);
+    walk_to(&mut s, "Inbox");
+    assert_eq!(
+        s.selected().map(|r| r.depth),
+        Some(2),
+        "the parent, not the system row"
+    );
+    assert_eq!(s.open(), Some(ScopeChoice::Account(1)));
+    let inbox = s
+        .rows()
+        .iter()
+        .position(|r| r.label == "Inbox" && r.depth == 1 && r.account() == Some(1));
+    assert_eq!(s.current(&ScopeChoice::Account(1)), inbox);
+    walk_to(&mut s, "Outbox");
+    s.point_at(&ScopeChoice::Account(1));
+    assert_eq!(Some(s.cursor()), inbox);
+}
+
 #[test]
 fn unread_serves_the_header_from_the_counts() {
     let s = sidebar();
