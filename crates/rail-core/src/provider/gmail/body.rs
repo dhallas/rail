@@ -290,7 +290,7 @@ fn to_text(bytes: &[u8], charset: Option<&str>) -> String {
 /// `text` with lines (CRLF and a lone CR become LF) and tabs kept, and every other control
 /// character (ESC, NUL, C1...) and format character (bidi controls, zero-width characters,
 /// the byte-order mark) removed.
-fn clean(text: &str) -> String {
+pub(crate) fn clean(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {

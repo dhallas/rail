@@ -21,7 +21,13 @@
 //!
 //! The text is never longer than the HTML: the shortest anchor Rail numbers, `<a href=http:>`,
 //! is 14 bytes and its marker at most `[200]`, 5 bytes.
+//!
+//! For the reader, `html_styled` gives the same text in runs of one style each: strong
+//! (`b`, `strong`, `h1`-`h6`), emphasised (`i`, `em`), quoted (`blockquote`) and linked (a
+//! numbered link's text and marker). Each style is a saturating count of open tags, not a
+//! stack, so stray or missing end tags cost nothing; line breaks carry no style.
 
+use crate::provider::gmail::body::clean;
 use crate::provider::links::{MAX_LINK_BYTES, Numbering, Rendered};
 
 /// Bytes one tag (or `<!...>` declaration) may span before Rail treats it as closed.
@@ -62,6 +68,9 @@ const BLOCK: &[&[u8]] = &[
     b"footer",
 ];
 const CELL: &[&[u8]] = &[b"td", b"th"];
+const STRONG: &[&[u8]] = &[b"b", b"strong", b"h1", b"h2", b"h3", b"h4", b"h5", b"h6"];
+const EMPHASIS: &[&[u8]] = &[b"i", b"em"];
+const QUOTE: &[&[u8]] = &[b"blockquote"];
 /// Elements whose content is dropped up to their own end tag.
 const HIDDEN: &[&[u8]] = &[
     b"script",
@@ -154,8 +163,65 @@ const ENTITIES: &[(&[u8], char)] = &[
     (b"Uuml", 'Ü'),
 ];
 
+/// How a stretch of text is drawn.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Style {
+    pub strong: bool,
+    pub emphasis: bool,
+    pub link: bool,
+    pub quote: bool,
+}
+
+impl Style {
+    pub const PLAIN: Self = Self {
+        strong: false,
+        emphasis: false,
+        link: false,
+        quote: false,
+    };
+}
+
+/// A stretch of text in one style.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Run {
+    pub text: String,
+    pub style: Style,
+}
+
+/// A body's text as styled runs, with the addresses its `[n]` markers stand for (link `n` is
+/// `links[n - 1]`). The runs joined are the body text Rail stores for the same HTML.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Styled {
+    pub runs: Vec<Run>,
+    pub links: Vec<String>,
+}
+
 /// `html` as plain text with link markers, and the addresses they stand for.
 pub(crate) fn html_render(html: &str) -> Rendered {
+    let (out, links, _) = scan(html, false);
+    // Only whole UTF-8 sequences of the input and whole encoded characters are written.
+    let text = String::from_utf8(out)
+        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+    Rendered { text, links }
+}
+
+/// `html` as styled runs (see the module documentation), each cleaned of control and format
+/// characters as stored body text is.
+pub fn html_styled(html: &str) -> Styled {
+    let (out, links, starts) = scan(html, true);
+    let mut runs: Vec<Run> = Vec::with_capacity(starts.len());
+    for (index, &(start, style)) in starts.iter().enumerate() {
+        let end = starts.get(index + 1).map_or(out.len(), |&(next, _)| next);
+        let text = clean(&String::from_utf8_lossy(&out[start.min(end)..end]));
+        if !text.is_empty() {
+            runs.push(Run { text, style });
+        }
+    }
+    Styled { runs, links }
+}
+
+/// The scanner's text, its links, and (when `styled`) where each run of one style starts.
+fn scan(html: &str, styled: bool) -> (Vec<u8>, Vec<String>, Vec<(usize, Style)>) {
     let mut scanner = Scanner {
         bytes: html.as_bytes(),
         out: Vec::with_capacity(html.len().min(1 << 20)),
@@ -163,19 +229,18 @@ pub(crate) fn html_render(html: &str) -> Rendered {
         newlines: 0,
         links: Numbering::default(),
         open: None,
+        counts: Counts::default(),
+        starts: styled.then(Vec::new),
     };
     scanner.run();
     scanner.close_link();
     while scanner.out.last() == Some(&b'\n') {
         scanner.out.pop();
     }
-    // Only whole UTF-8 sequences of the input and whole encoded characters are written.
-    let text = String::from_utf8(scanner.out)
-        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
-    Rendered {
-        text,
-        links: scanner.links.into_links(),
-    }
+    let len = scanner.out.len();
+    let mut starts = scanner.starts.unwrap_or_default();
+    starts.retain(|&(start, _)| start < len);
+    (scanner.out, scanner.links.into_links(), starts)
 }
 
 /// `html` as plain text (see the module documentation), for the scanner's own tests.
@@ -210,6 +275,34 @@ impl Name {
     }
 }
 
+/// Open tags of each style, saturating: stray end tags stop at zero.
+#[derive(Default)]
+struct Counts {
+    strong: u8,
+    emphasis: u8,
+    quote: u8,
+}
+
+impl Counts {
+    /// Count the start or end tag `name`.
+    fn tag(&mut self, name: &Name, closing: bool) {
+        let count = if name.is_in(STRONG) {
+            &mut self.strong
+        } else if name.is_in(EMPHASIS) {
+            &mut self.emphasis
+        } else if name.is_in(QUOTE) {
+            &mut self.quote
+        } else {
+            return;
+        };
+        *count = if closing {
+            count.saturating_sub(1)
+        } else {
+            count.saturating_add(1)
+        };
+    }
+}
+
 struct Scanner<'a> {
     bytes: &'a [u8],
     out: Vec<u8>,
@@ -221,6 +314,9 @@ struct Scanner<'a> {
     links: Numbering,
     /// The number of the `<a>` still open, whose marker goes after its text.
     open: Option<usize>,
+    counts: Counts,
+    /// Where each run of one style starts in `out`; `None` when only the text is wanted.
+    starts: Option<Vec<(usize, Style)>>,
 }
 
 impl Scanner<'_> {
@@ -250,16 +346,49 @@ impl Scanner<'_> {
     }
 
     fn visible(&mut self, start: usize, end: usize) {
-        self.flush_space();
+        self.begin(self.style());
         self.out.extend_from_slice(&self.bytes[start..end]);
         self.newlines = 0;
     }
 
-    fn flush_space(&mut self) {
+    /// The style of text written now.
+    fn style(&self) -> Style {
+        Style {
+            strong: self.counts.strong > 0,
+            emphasis: self.counts.emphasis > 0,
+            link: self.open.is_some(),
+            quote: self.counts.quote > 0,
+        }
+    }
+
+    /// Start a run at the end of `out` when `style` differs from the last one.
+    fn mark(&mut self, style: Style) {
+        if let Some(starts) = &mut self.starts
+            && starts.last().is_none_or(|&(_, last)| last != style)
+        {
+            starts.push((self.out.len(), style));
+        }
+    }
+
+    /// Before text in `style`: the pending space, in the styles shared by the text on both
+    /// sides of it, then a run for `style`.
+    fn begin(&mut self, style: Style) {
         if self.space && !self.out.is_empty() && self.newlines == 0 {
+            let before = self
+                .starts
+                .as_ref()
+                .and_then(|s| s.last())
+                .map_or(Style::PLAIN, |&(_, last)| last);
+            self.mark(Style {
+                strong: before.strong && style.strong,
+                emphasis: before.emphasis && style.emphasis,
+                link: before.link && style.link,
+                quote: before.quote && style.quote,
+            });
             self.out.push(b' ');
         }
         self.space = false;
+        self.mark(style);
     }
 
     fn push_char(&mut self, c: char) {
@@ -267,7 +396,7 @@ impl Scanner<'_> {
             self.space = true;
             return;
         }
-        self.flush_space();
+        self.begin(self.style());
         let mut buf = [0u8; 4];
         self.out
             .extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
@@ -277,6 +406,7 @@ impl Scanner<'_> {
     fn newline(&mut self) {
         self.space = false;
         if !self.out.is_empty() && self.newlines < MAX_NEWLINES {
+            self.mark(Style::PLAIN);
             self.out.push(b'\n');
             self.newlines += 1;
         }
@@ -293,7 +423,10 @@ impl Scanner<'_> {
     /// The marker of the open `<a>`, if it has one.
     fn close_link(&mut self) {
         if let Some(number) = self.open.take() {
-            self.flush_space();
+            self.begin(Style {
+                link: true,
+                ..self.style()
+            });
             self.out.extend_from_slice(format!("[{number}]").as_bytes());
             self.newlines = 0;
         }
@@ -324,6 +457,7 @@ impl Scanner<'_> {
             }
             return end;
         }
+        self.counts.tag(&name, closing);
         if name.is_in(BLOCK) {
             self.newline();
         } else if name.is_in(CELL) {
