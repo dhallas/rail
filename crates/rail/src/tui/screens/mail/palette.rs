@@ -182,9 +182,10 @@ impl MailScreen {
         ]
     }
 
+    /// One entry per folder: a parent row that opens a system folder is not that folder's own.
     fn label_entries(&self) -> impl Iterator<Item = PaletteEntry> + '_ {
         self.sidebar.all_rows().iter().filter_map(|row| {
-            let scope = row.scope()?;
+            let scope = row.scope().filter(|s| row.is_row_of(s))?;
             let ScopeChoice::Folder { account, name, .. } = &scope else {
                 return None;
             };
