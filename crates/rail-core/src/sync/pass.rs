@@ -250,6 +250,7 @@ impl Engine {
                     tracing::warn!(account = %self.account.name, id = %id.escape_debug(), "stored a marker for a body Rail could not read");
                     let marker = Body {
                         text: UNREADABLE_BODY.to_string(),
+                        attachments_unknown: true,
                         ..Body::default()
                     };
                     bodies.push((id, marker));

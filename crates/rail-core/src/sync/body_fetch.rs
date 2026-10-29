@@ -118,6 +118,7 @@ fn sort(
             tracing::warn!(account, id = %id.escape_debug(), "stored a marker for a body Rail could not read");
             let marker = Body {
                 text: UNREADABLE_BODY.to_string(),
+                attachments_unknown: true,
                 ..Body::default()
             };
             (BodyOutcome::Unreadable, Some(marker))
