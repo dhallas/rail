@@ -150,13 +150,25 @@ fn hint_for(error: &ThemeError) -> &'static str {
 
 /// How this terminal draws pictures (kitty, iTerm2 or sixel, and its cell size), asked once
 /// before the screen starts reading keys, since the answer comes on stdin. A terminal that
-/// does not answer gets half blocks.
+/// does not answer gets half blocks, after the query's wait of up to 2 s; one that cannot
+/// answer (`asks_terminal`) is not asked, so start-up never waits on it and the query never
+/// reads the first keys.
 fn picker() -> Option<ratatui_image::picker::Picker> {
     if test_hooks::no_image_query() {
         return None;
     }
+    let halfblocks = ratatui_image::picker::Picker::halfblocks;
+    if !asks_terminal(std::env::var("TERM").ok().as_deref()) {
+        return Some(halfblocks());
+    }
     let picker = ratatui_image::picker::Picker::from_query_stdio();
-    Some(picker.unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks()))
+    Some(picker.unwrap_or_else(|_| halfblocks()))
+}
+
+/// Whether a terminal named `term` (`$TERM`) can answer the picture query: not when it is
+/// unset, empty or `dumb`.
+fn asks_terminal(term: Option<&str>) -> bool {
+    term.is_some_and(|term| !term.is_empty() && term != "dumb")
 }
 
 #[cfg(test)]
@@ -166,6 +178,15 @@ mod tests {
     fn error(text: &str) -> ThemeError {
         let config = rail_core::config::parse(text, std::path::Path::new("/c")).unwrap();
         ThemeChoice::from_config(&config.general, text, std::path::Path::new("/c")).unwrap_err()
+    }
+
+    #[test]
+    fn only_a_terminal_that_can_answer_is_asked_how_it_draws_pictures() {
+        assert!(asks_terminal(Some("xterm-kitty")));
+        assert!(asks_terminal(Some("xterm-256color")));
+        assert!(!asks_terminal(None));
+        assert!(!asks_terminal(Some("")));
+        assert!(!asks_terminal(Some("dumb")));
     }
 
     #[test]

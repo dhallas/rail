@@ -1385,7 +1385,7 @@ running syncs carry on unchanged.
 | `attachment_dir` | unset | Where `s`, `S` and `w` save attachments. Unset is your download directory (the `XDG_DOWNLOAD_DIR` entry of `~/.config/user-dirs.dirs` on Linux, else `~/Downloads`). `~` is expanded, and refused when there is no `$HOME` to expand it to; a relative path is refused, as is one inside Rail's own attachment cache (`attachments` in the cache directory, reached directly, through a symlink or through `..`), whose files Rail sweeps a day after it writes them. |
 | `saved_search_counts` | `true` | Unread counts beside each saved search in the sidebar. `false` leaves them out and skips the count queries, the one thing saved searches cost on a large mailbox. `:search-counts` toggles it and saves it. |
 | `rich_html` | `true` | The reader draws HTML mail's bold, italic, quoted and linked text in those styles. `false` shows the same text plain. `:rich-html` toggles it and saves it. |
-| `images` | `true` | With `rich_html`, the reader draws the pictures an HTML message carries inline, through the terminal's image protocol (kitty, iTerm2 or sixel) or as coloured half blocks elsewhere. `false` leaves them out. `:images` toggles it and saves it. |
+| `images` | `true` | With `rich_html`, the reader draws the pictures an HTML message carries inline, through the terminal's image protocol (kitty, iTerm2 or sixel) or as coloured half blocks elsewhere. Rail asks the terminal which it speaks as it starts, waiting up to 2 s for one that does not answer; with `TERM` unset, empty or `dumb` it does not ask and draws half blocks. `false` leaves them out. `:images` toggles it and saves it. |
 
 ### `[[saved_searches]]`
 
