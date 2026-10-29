@@ -500,6 +500,7 @@ pub fn mail_ctx(paths: &Paths, fake: Arc<FakeDaemon>) -> MailContext {
         rich_html: true,
         images: true,
         remote_images: false,
+        remote_images_from: Vec::new(),
         picker: Some(ratatui_image::picker::Picker::halfblocks()),
         dim_read: rail_core::config::DimRead::Dot,
         hyperlinks: false,

@@ -126,6 +126,9 @@ pub struct MailContext {
     /// `general.remote_images`: remote pictures fetched without the key; `:remote-images`
     /// flips it.
     pub remote_images: bool,
+    /// `general.remote_images_from`: senders whose remote pictures are always fetched; `I`
+    /// adds or removes the cursor message's sender.
+    pub remote_images_from: Vec<String>,
     /// How this terminal draws pictures, asked once at start; `None` when it was not asked.
     pub picker: Option<ratatui_image::picker::Picker>,
     /// How read list rows are dimmed; `:dim-read` cycles the modes.

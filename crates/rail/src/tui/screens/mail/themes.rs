@@ -4,7 +4,7 @@ use std::path::Path;
 
 use rail_core::config::lock::lock_config;
 use rail_core::config::{
-    load_text_or_empty, set_general_bool, set_general_number, set_general_text,
+    load_text_or_empty, set_general, set_general_bool, set_general_number, set_general_text,
 };
 use rail_core::paths::{create_private_dir, replace_private_atomic};
 use ratatui::style::Color;
@@ -263,6 +263,7 @@ pub(super) enum Saved {
     Text(Option<String>),
     Number(Option<i64>),
     Bool(Option<bool>),
+    List(Option<Vec<String>>),
 }
 
 /// Read, edit and replace `config.toml` (an owner-only sibling, synced, then renamed) under the
@@ -283,6 +284,12 @@ pub(super) fn write_general(path: &Path, key: &str, value: Saved) -> Result<(), 
         Saved::Text(v) => set_general_text(&text, path, key, v.as_deref()),
         Saved::Number(v) => set_general_number(&text, path, key, v),
         Saved::Bool(v) => set_general_bool(&text, path, key, v),
+        Saved::List(v) => set_general(
+            &text,
+            path,
+            key,
+            v.map(|list| toml_edit::Value::Array(list.into_iter().collect())),
+        ),
     }
     .map_err(|e| e.to_string())?;
     if let Some(dir) = path

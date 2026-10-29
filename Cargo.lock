@@ -2823,6 +2823,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "toml_edit",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",

@@ -17,6 +17,9 @@ use super::pictures::{
 use super::rich::{Placing, from_html, lines};
 use super::test_threads::{four, message, person, reader_of};
 
+/// The hint the screen builds from the default keys.
+const HINT: &str = "Remote pictures are not shown; i loads them, I always for this sender.";
+
 /// Cells of 8 by 16 pixels, as many terminals have.
 const FONT: (u16, u16) = (8, 16);
 
@@ -31,7 +34,7 @@ fn built(html: &str, states: Option<&Pictures>) -> Vec<ReaderLine> {
     built_holding(html, states, None)
 }
 
-/// `built`, with remote pictures held back and `hint` naming the key that loads them.
+/// `built`, with remote pictures held back and `hint` saying how to load them.
 fn built_holding(html: &str, states: Option<&Pictures>, hint: Option<&str>) -> Vec<ReaderLine> {
     let body = from_html(html);
     let placing = states.map(|states| Placing {
@@ -289,17 +292,8 @@ fn a_picture_is_inline_by_its_content_id_or_remote_by_its_https_address() {
 fn held_back_remote_pictures_leave_a_hint_and_their_alt_text_until_loaded() {
     let html = r#"<p>Hi</p><img src="https://cdn.example.com/sale.png" alt="Sale" width="160"
                   height="64"><img src="https://t.example.com/o.gif"><p>Bye</p>"#;
-    let held = built_holding(html, Some(&HashMap::new()), Some("i"));
-    assert_eq!(
-        texts(&held),
-        [
-            "Remote pictures are not shown; i loads them.",
-            "Hi",
-            "[image: Sale]",
-            "",
-            "Bye"
-        ]
-    );
+    let held = built_holding(html, Some(&HashMap::new()), Some(HINT));
+    assert_eq!(texts(&held), [HINT, "Hi", "[image: Sale]", "", "Bye"]);
     assert!(matches!(held[0].kind, LineKind::Body { message: 0 }));
     // Loaded (or images off): no hint; loading, the alt text stands in.
     assert_eq!(
@@ -307,14 +301,14 @@ fn held_back_remote_pictures_leave_a_hint_and_their_alt_text_until_loaded() {
         ["Hi", "[image: Sale]", "", "Bye"]
     );
     assert_eq!(
-        texts(&built_holding(html, None, Some("i"))),
+        texts(&built_holding(html, None, Some(HINT))),
         ["Hi", "", "Bye"],
         "images off: no hint"
     );
     // A body with only inline pictures has nothing to load.
     let inline = r#"<p>Hi</p><img src="cid:logo@x" alt="Logo">"#;
     assert_eq!(
-        texts(&built_holding(inline, Some(&HashMap::new()), Some("i")))[0],
+        texts(&built_holding(inline, Some(&HashMap::new()), Some(HINT)))[0],
         "Hi"
     );
 }
@@ -338,7 +332,7 @@ fn a_reader_asks_for_remote_pictures_only_once_they_are_loaded() {
     let mut reader = reader_of(four(0), ThreadOrder::Oldest)
         .with_rich(true)
         .with_images(Some(Picker::halfblocks()))
-        .with_remote(false, "i".into());
+        .with_remote(false, HashSet::new(), HINT.into());
     reader.rich_read(4, Some(from_html(html)));
     let sources = |reader: &super::Reader| -> Vec<Source> {
         reader.pictures_wanted().into_iter().map(|w| w.2).collect()
@@ -358,11 +352,43 @@ fn a_reader_asks_for_remote_pictures_only_once_they_are_loaded() {
     let mut always = reader_of(four(0), ThreadOrder::Oldest)
         .with_rich(true)
         .with_images(Some(Picker::halfblocks()))
-        .with_remote(true, "i".into());
+        .with_remote(true, HashSet::new(), HINT.into());
     always.rich_read(4, Some(from_html(html)));
     assert_eq!(
         always.pictures_wanted().len(),
         2,
         "remote_images loads them from the start"
+    );
+}
+
+#[test]
+fn a_trusted_senders_remote_pictures_load_without_the_key_and_others_wait() {
+    // Message 4 is David's; Tom's message 2 is collapsed.
+    let html = r#"<p>a</p><img src="https://cdn.example.com/a.png" width="160" height="64">"#;
+    let trusted = HashSet::from(["david@example.com".to_string()]);
+    let mut reader = reader_of(four(0), ThreadOrder::Oldest)
+        .with_rich(true)
+        .with_images(Some(Picker::halfblocks()))
+        .with_remote(false, trusted, HINT.into());
+    reader.rich_read(4, Some(from_html(html)));
+    assert_eq!(reader.pictures_wanted().len(), 1, "David is trusted");
+    assert!(
+        !reader.lines(100).iter().any(|l| l.text() == HINT),
+        "no hint on a trusted sender's message"
+    );
+
+    reader.set_trusted(HashSet::from(["tom@example.com".to_string()]));
+    assert!(reader.pictures_wanted().is_empty(), "David no longer is");
+    assert!(reader.lines(100).iter().any(|l| l.text() == HINT));
+}
+
+#[test]
+fn the_sender_at_the_cursor_is_its_messages_first_address_in_lower_case() {
+    let mut detail = four(0);
+    detail.messages[3].from = vec![person(Some("David"), "David@Example.COM")];
+    let reader = reader_of(detail, ThreadOrder::Oldest);
+    assert_eq!(
+        reader.sender_at_cursor().as_deref(),
+        Some("david@example.com")
     );
 }

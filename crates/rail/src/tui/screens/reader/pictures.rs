@@ -4,18 +4,19 @@
 //! declares (or the picture's own), at `CSS_PX_PER_COL` CSS pixels to a column, rows from the
 //! terminal cell's shape, shrunk to the pane and `MAX_PICTURE_ROWS`. A picture of
 //! `MAX_HIDDEN_PX` or less on a side is a tracking pixel or a spacer and takes no room.
-//! Fetching a remote picture tells its sender the mail was read, so a thread's remote pictures
-//! are asked for only once they are loaded (`remote_images`, or the key for this thread).
+//! Fetching a remote picture tells its sender the mail was read, so a message's remote
+//! pictures are asked for only once they are loaded: `remote_images`, the key for this thread,
+//! or a sender in `remote_images_from`.
 //! A reader asks for at most `MAX_PICTURES_PER_READER`, `MAX_PICTURES_IN_FLIGHT` at a time,
 //! and keeps each shrunk to `MAX_KEPT_PIXELS`, so one mail cannot fill memory.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::rc::Rc;
 
 use image::{DynamicImage, ImageReader, Limits};
 use rail_core::provider::html::Image;
-use rail_core::store::view::BodyState;
+use rail_core::store::view::{BodyState, MessageView};
 use ratatui::layout::Size;
 use ratatui_image::picker::Picker;
 use ratatui_image::sliced::SlicedProtocol;
@@ -156,6 +157,16 @@ fn remote(src: &str) -> Option<String> {
     (https && src.len() > 8 && src.len() <= MAX_REMOTE_URL_BYTES).then(|| src.to_string())
 }
 
+/// `m`'s first sender's address, in lower case.
+fn sender(m: &MessageView) -> Option<String> {
+    m.from.first().map(|p| p.address.to_lowercase())
+}
+
+/// `m`'s sender is one whose remote pictures are always fetched.
+pub(super) fn trusts(trusted: &HashSet<String>, m: &MessageView) -> bool {
+    sender(m).is_some_and(|address| trusted.contains(&address))
+}
+
 /// The picture at `path` decoded, within `MAX_DECODED_SIDE` and `MAX_DECODE_ALLOC`, and
 /// shrunk to `MAX_KEPT_PIXELS`. An animated picture gives its first frame. The error is the
 /// decoder's, never the path.
@@ -243,12 +254,24 @@ impl Reader {
         self.changed();
     }
 
-    /// Remote pictures fetched for this thread from the start (`remote_images`) or not, and
-    /// the key that loads them, for the hint while they are not.
-    pub fn with_remote(mut self, loaded: bool, key: String) -> Self {
+    /// Remote pictures fetched for this thread from the start (`remote_images`) or not, the
+    /// senders whose are always fetched (lower case), and the hint while they are not.
+    pub fn with_remote(mut self, loaded: bool, trusted: HashSet<String>, hint: String) -> Self {
         self.remote = loaded;
-        self.remote_key = key;
+        self.trusted = trusted;
+        self.remote_hint = hint;
         self
+    }
+
+    /// The senders whose remote pictures are always fetched, from now on.
+    pub fn set_trusted(&mut self, trusted: HashSet<String>) {
+        self.trusted = trusted;
+        self.changed();
+    }
+
+    /// The cursor message's sender, in lower case.
+    pub fn sender_at_cursor(&self) -> Option<String> {
+        self.message_at_cursor().and_then(sender)
     }
 
     /// `:remote-images` flipped: from now on, this thread's remote pictures fetched or not.
@@ -275,15 +298,14 @@ impl Reader {
         Some((&self.pictures, (font.width, font.height)))
     }
 
-    /// The key that loads remote pictures, while this thread has not loaded them.
-    pub(super) fn remote_hint(&self) -> Option<&str> {
-        (!self.remote).then_some(self.remote_key.as_str())
+    /// While this thread has not loaded its remote pictures: the hint, and the senders whose
+    /// messages need none.
+    pub(super) fn held(&self) -> Option<(&str, &HashSet<String>)> {
+        (!self.remote).then_some((self.remote_hint.as_str(), &self.trusted))
     }
 
     /// Each open message whose body is read, with its HTML scanned.
-    fn open_bodies(
-        &self,
-    ) -> impl Iterator<Item = (&rail_core::store::view::MessageView, &RichBody)> {
+    fn open_bodies(&self) -> impl Iterator<Item = (&MessageView, &RichBody)> {
         self.detail
             .messages
             .iter()
@@ -316,7 +338,8 @@ impl Reader {
                 if wanted.len() == room {
                     return wanted;
                 }
-                if matches!(inline.source, Source::Remote(_)) && !self.remote {
+                let held = !self.remote && !trusts(&self.trusted, m);
+                if held && matches!(inline.source, Source::Remote(_)) {
                     continue;
                 }
                 let key = (m.id, inline.source.clone());

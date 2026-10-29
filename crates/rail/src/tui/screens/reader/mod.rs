@@ -60,6 +60,8 @@ pub enum ReaderOutcome {
     Attachments,
     /// `w`: save the cursor message's attachments, without the list.
     SaveAttachments,
+    /// `I`: always load the cursor message's sender's remote pictures, or stop.
+    TrustSender,
 }
 
 /// The thread's account as the title block shows it.
@@ -131,8 +133,10 @@ pub struct Reader {
     protocols: RefCell<pictures::Protocols>,
     /// This thread's remote pictures are fetched (`remote_images`, or the key).
     remote: bool,
-    /// The key that loads them, for the hint while they are not.
-    remote_key: String,
+    /// Senders whose remote pictures are always fetched (`remote_images_from`), lower case.
+    trusted: HashSet<String>,
+    /// What a body with remote pictures held back starts with.
+    remote_hint: String,
     /// The last re-read failed: the subject line shows this (escaped) until a read succeeds.
     read_error: Option<String>,
     cursor: usize,
@@ -189,7 +193,8 @@ impl Reader {
             pictures: HashMap::new(),
             protocols: RefCell::new(HashMap::new()),
             remote: false,
-            remote_key: String::new(),
+            trusted: HashSet::new(),
+            remote_hint: String::new(),
             read_error: None,
             cursor: 0,
             scroll: 0,
@@ -553,7 +558,7 @@ impl Reader {
             read_error: self.read_error.as_deref(),
             rich: self.rich.then_some(&self.rich_bodies),
             pictures: self.placing(),
-            remote_hint: self.remote_hint(),
+            remote_held: self.held(),
         };
         let built = Rc::new(cards::build(
             &self.detail,
@@ -624,6 +629,7 @@ impl Reader {
             Action::ReaderOpenBrowser => return ReaderOutcome::OpenBrowser,
             Action::ReaderAttachments => return ReaderOutcome::Attachments,
             Action::ReaderSaveAttachments => return ReaderOutcome::SaveAttachments,
+            Action::ReaderTrustImages => return ReaderOutcome::TrustSender,
             _ => {}
         }
         self.scroll = crate::tui::screens::mail::visible_offset(self.scroll, self.cursor, page);

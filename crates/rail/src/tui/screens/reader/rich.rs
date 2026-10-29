@@ -5,7 +5,7 @@
 //! images on, each picture (`pictures`) stands where the mail puts it, breaking the line it
 //! falls in: its rows once it is decoded, `[image: alt]` until then (a remote one without alt
 //! text, often a tracking pixel, takes no room). While a thread's remote pictures are held
-//! back, a body that has some starts with a hint naming the key that loads them.
+//! back, a body that has some starts with a hint naming the keys that load them.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -68,8 +68,8 @@ pub fn from_html(html: &str) -> RichBody {
 }
 
 /// What placing pictures takes: the pictures read so far by (message id, source), the
-/// terminal cell's size in pixels, this message's id, and the key that loads remote pictures
-/// while the thread has not.
+/// terminal cell's size in pixels, this message's id, and the hint while its remote pictures
+/// are held back.
 pub(super) struct Placing<'a> {
     pub states: &'a Pictures,
     pub font: (u16, u16),
@@ -131,8 +131,8 @@ pub(super) fn lines(
     let held = placing
         .and_then(|p| p.remote_hint)
         .filter(|_| shown.iter().any(|p| matches!(p.source, Source::Remote(_))));
-    if let Some(key) = held {
-        let hint = escape(&format!("Remote pictures are not shown; {key} loads them."));
+    if let Some(hint) = held {
+        let hint = escape(hint);
         let kind = LineKind::Body { message: index };
         out.push(ReaderLine::one(kind, fit(&hint, width), Tone::Muted));
     }

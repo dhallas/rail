@@ -81,7 +81,8 @@ impl MailScreen {
                             .with_images(self.picker())
                             .with_remote(
                                 self.ctx.remote_images,
-                                self.ctx.keymap.label(Action::ReaderLoadImages),
+                                self.trusted_senders(),
+                                self.remote_hint(),
                             );
                         self.reader = Some(reader);
                         // A read landing under an open composer leaves it the keys.
@@ -234,6 +235,7 @@ impl MailScreen {
             ReaderOutcome::Attachments => self.attachments(),
             ReaderOutcome::SaveAttachments => return self.save_cursor_attachments(),
             ReaderOutcome::OpenBrowser => return self.open_html(),
+            ReaderOutcome::TrustSender => return self.trust_sender(),
         }
         Vec::new()
     }

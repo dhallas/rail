@@ -1,6 +1,7 @@
 //! Pictures through the mail screen: an open HTML message's `cid:` picture asked of the daemon
 //! once, its rows kept and drawn, and `:images` hiding it, saved to `config.toml`; a remote
-//! picture held back until `i` loads the thread's, or `:remote-images` loads them always.
+//! picture held back until `i` loads the thread's, `I` trusts its sender, or `:remote-images`
+//! loads them always.
 
 use crossterm::event::KeyCode;
 use image::RgbaImage;
@@ -187,12 +188,9 @@ fn remote_calls(f: &Fixture) -> Vec<FakeCall> {
 }
 
 fn has_hint(f: &Fixture) -> bool {
-    f.screen
-        .reader()
-        .unwrap()
-        .lines(80)
-        .iter()
-        .any(|l| l.text() == "Remote pictures are not shown; i loads them.")
+    f.screen.reader().unwrap().lines(80).iter().any(|l| {
+        l.text() == "Remote pictures are not shown; i loads them, I always for this sender."
+    })
 }
 
 #[tokio::test]
@@ -234,4 +232,43 @@ async fn colon_remote_images_loads_them_always_and_saves_the_choice() {
     assert!(f.screen.status_line().contains("remote images: off"));
     let text = std::fs::read_to_string(f.paths.config_file()).unwrap();
     assert!(!text.contains("remote_images"), "{text}");
+}
+
+#[tokio::test]
+async fn capital_i_trusts_the_sender_for_good_and_again_stops_trusting_them() {
+    let (mut f, _dir) = with_a_remote_picture().await;
+    press(&mut f, KeyCode::Enter).await;
+    open_toms_card(&mut f).await;
+    assert_eq!(remote_calls(&f), []);
+
+    press(&mut f, KeyCode::Char('I')).await;
+    assert!(
+        f.screen
+            .status_line()
+            .contains("remote pictures from tom@example.com: always"),
+        "{}",
+        f.screen.status_line()
+    );
+    assert_eq!(remote_calls(&f).len(), 1, "loaded at once");
+    assert!(!has_hint(&f));
+    let text = std::fs::read_to_string(f.paths.config_file()).unwrap();
+    assert!(
+        text.contains(r#"remote_images_from = ["tom@example.com"]"#),
+        "{text}"
+    );
+
+    // Opened again, Tom's pictures load without a key.
+    press(&mut f, KeyCode::Char('q')).await;
+    press(&mut f, KeyCode::Enter).await;
+    open_toms_card(&mut f).await;
+    assert_eq!(remote_calls(&f).len(), 2);
+
+    press(&mut f, KeyCode::Char('I')).await;
+    assert!(
+        f.screen
+            .status_line()
+            .contains("tom@example.com: ask first")
+    );
+    let text = std::fs::read_to_string(f.paths.config_file()).unwrap();
+    assert!(!text.contains("remote_images_from"), "{text}");
 }
