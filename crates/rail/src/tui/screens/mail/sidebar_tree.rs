@@ -4,6 +4,7 @@
 
 use std::collections::HashSet;
 
+use rail_core::config::AccountKind;
 use rail_core::provider::FolderKind;
 use rail_core::store::view::FolderCount;
 
@@ -56,7 +57,8 @@ pub enum RowKind {
     },
     /// `More folders (N)`.
     More { account: usize, hidden: usize },
-    /// A tree node with folders under it; `scope` when it is itself a folder.
+    /// A tree node with folders under it; `scope` when it is itself a folder or, on Microsoft
+    /// 365, a top-level path named after a system folder (`Inbox` of `Inbox/X`).
     Parent {
         account: usize,
         path: String,
@@ -91,11 +93,13 @@ pub enum RowKey {
     },
 }
 
-/// An account as the tree takes it: its label, drawn, and its address, its rows' key.
+/// An account as the tree takes it: its label, drawn, its address, its rows' key, and its
+/// provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TreeAccount {
     pub label: String,
     pub address: String,
+    pub kind: AccountKind,
 }
 
 /// The account a row belongs to: its place in config (the scope's) and its address (the key's).
@@ -103,6 +107,7 @@ pub struct TreeAccount {
 struct Owner<'a> {
     index: usize,
     address: &'a str,
+    kind: AccountKind,
 }
 
 impl Owner<'_> {
@@ -212,6 +217,7 @@ pub fn build(
         let owner = Owner {
             index,
             address: &account.address,
+            kind: account.kind,
         };
         let id = outcome.account_ids.get(index).copied().flatten();
         let own: Vec<&FolderCount> = outcome
@@ -490,7 +496,10 @@ fn more_rows(owner: Owner<'_>, own: &[&FolderCount], folds: &Folds) -> Vec<Sideb
         .filter(|f| SYSTEM.contains(&kind_of(f)))
         .collect();
     let mut tree = Node::tree(&other);
-    tree.link_system(&system);
+    // Only Microsoft 365 nests folders: a Gmail label `Sent/2024` is not inside Sent.
+    if owner.kind == AccountKind::M365 {
+        tree.link_system(&system);
+    }
     let mut rows = vec![rule, head];
     tree.emit(owner, 2, &[account, more], folds, &mut rows);
     rows
@@ -647,6 +656,7 @@ impl<'a> Node<'a> {
 
 #[cfg(test)]
 pub(super) mod fixtures {
+    use rail_core::config::AccountKind;
     use rail_core::store::view::{AccountCounts, FolderCount, SidebarCounts, UnifiedCounts};
 
     use crate::tui::data::SidebarOutcome;
@@ -744,10 +754,12 @@ pub(super) mod fixtures {
             super::TreeAccount {
                 label: "Personal".into(),
                 address: PERSONAL.into(),
+                kind: AccountKind::Gmail,
             },
             super::TreeAccount {
                 label: "AXON".into(),
                 address: AXON.into(),
+                kind: AccountKind::M365,
             },
         ]
     }

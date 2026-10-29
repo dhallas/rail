@@ -71,6 +71,7 @@ impl Sidebar {
             .map(|a| TreeAccount {
                 label: a.label.clone(),
                 address: a.address.clone(),
+                kind: a.kind,
             })
             .collect();
         self.capped = capped(accounts.len(), outcome);
@@ -209,7 +210,8 @@ impl Sidebar {
     }
 
     /// `Enter`: the scope to show; `None` when the row unfolds in place instead (`More
-    /// folders`, a path with no folder of its own).
+    /// folders`, a path with no folder of its own, unless on Microsoft 365 it is named after a
+    /// system folder, which it opens).
     pub fn open(&mut self) -> Option<ScopeChoice> {
         let row = self.selected()?;
         if let Some(scope) = row.scope() {

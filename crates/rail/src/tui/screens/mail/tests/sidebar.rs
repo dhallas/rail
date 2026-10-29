@@ -128,6 +128,47 @@ async fn enter_and_space_act_on_each_kind_of_row() {
     );
 }
 
+/// On Microsoft 365 `Inbox/Some folder` sits inside the Inbox: `Enter` on its `Inbox` parent
+/// opens the Inbox, and `Space` still folds and unfolds the parent.
+#[tokio::test]
+async fn enter_on_a_microsoft_365_system_folders_parent_opens_that_folder() {
+    let mut f = fixture(3).await;
+    m365_home(&mut f).await;
+    sidebar_to(&mut f, Some(1), "More folders (2)").await;
+    press(&mut f, KeyCode::Char(' ')).await;
+    press(&mut f, KeyCode::Char('j')).await;
+    assert_eq!(here(&f), Some(("Inbox", Some(1))));
+    assert!(f.screen.sidebar.selected().is_some_and(|r| r.depth == 2));
+    let shown = rows(&f);
+    press(&mut f, KeyCode::Char(' ')).await;
+    assert_eq!(rows(&f), shown + 1, "Some folder shows");
+    press(&mut f, KeyCode::Char(' ')).await;
+    assert_eq!(rows(&f), shown, "folded again");
+    press(&mut f, KeyCode::Enter).await;
+    assert_eq!(f.screen.scope, ScopeChoice::Account(1));
+    assert_eq!(f.screen.focus, Focus::List);
+}
+
+/// Gmail label paths are names only: `Sent/2024` is not inside Sent, so `Enter` on its `Sent`
+/// parent unfolds it rather than opening Sent.
+#[tokio::test]
+async fn enter_on_a_gmail_label_path_named_like_sent_unfolds_it() {
+    let mut f = fixture(3).await;
+    writer(&f)
+        .apply(&labels(&[("Label_2", "Sent/2024")]), BASE_MS / 1000)
+        .unwrap();
+    store_changed(&mut f).await;
+    sidebar_to(&mut f, Some(0), "More folders (1)").await;
+    press(&mut f, KeyCode::Char(' ')).await;
+    press(&mut f, KeyCode::Char('j')).await;
+    assert_eq!(here(&f), Some(("Sent", Some(0))));
+    let shown = rows(&f);
+    press(&mut f, KeyCode::Enter).await;
+    assert_eq!(f.screen.scope, ScopeChoice::Unified);
+    assert_eq!(f.screen.focus, Focus::Sidebar);
+    assert_eq!(rows(&f), shown + 1, "2024 shows");
+}
+
 /// `→` and `←` are `sidebar.fold`'s other keys: on a folded More folders row `→` unfolds it and
 /// `←` folds it again, the cursor staying on the row and the scope unchanged.
 #[tokio::test]

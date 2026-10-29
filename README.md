@@ -380,8 +380,9 @@ Drafts, Spam and Trash on Gmail; Inbox, Sent Items, Drafts, Archive, Junk Email 
 on Microsoft 365); every other folder or label (up to 500 per account) is under
 `More folders (N)`, as a tree of its `/`-separated path (`Inbox/Infrastructure/Linode`), with
 Gmail's categories under `Categories`. `Enter` opens the mailbox under the cursor (an account
-opens its inbox, and a path named after a system folder, like `Inbox` above, opens that folder;
-`More folders` and a path that is not a folder itself unfold instead).
+opens its inbox; on Microsoft 365 a top-level path named after a system folder, like `Inbox`
+above, opens that folder; `More folders` and any other path that is not a folder itself unfold
+instead, as does Gmail's `Sent` path of a label `Sent/2024`, which is not inside Sent).
 `Space`, `←` or `→` folds or unfolds an account, `More folders` or a path; accounts start
 unfolded and the rest folded, for the session. Counts are unread threads (on a folded path,
 everything under it), drafts on `Drafts`, and none on `Sent` and `Trash`.

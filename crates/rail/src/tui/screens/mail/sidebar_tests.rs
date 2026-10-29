@@ -1,17 +1,20 @@
 //! The sidebar on its own: walking it, folding, what `Enter` does on each kind of row, pointing
 //! at a scope, its counts, and keeping its place across rebuilds.
 
+use rail_core::config::AccountKind;
+
 use super::AccountEntry;
 use super::Sidebar;
 use super::sidebar_tree::fixtures::{folder, two_accounts};
 use crate::tui::data::ScopeChoice;
 use crate::tui::test_util::work_and_home;
 
-/// `work` and `home` labelled as the fixtures' accounts are.
+/// `work` and `home` labelled and of the kinds the fixtures' accounts are.
 fn accounts() -> Vec<AccountEntry> {
     let mut accounts = work_and_home();
     accounts[0].label = "Personal".into();
     accounts[1].label = "AXON".into();
+    accounts[1].kind = AccountKind::M365;
     accounts
 }
 
