@@ -204,13 +204,7 @@ async fn an_html_body_naming_cid_images_lists_its_inline_parts_though_graph_says
     assert_eq!(body.attachments[0].content_id.as_deref(), Some("logo@x"));
 }
 
-#[tokio::test]
-async fn a_refused_attachment_listing_keeps_the_body() {
-    let g = Graph::start().await;
-    let html = "<p>Hello</p><img src=\"cid:logo@x\">";
-    let answer = json!({"id": "m1", "hasAttachments": true,
-                        "body": {"contentType": "html", "content": html}});
-    serve_body(&g, "m1", answer).await;
+async fn refuse_the_listing(g: &Graph) {
     let refusal = json!({"error": {"code": "BadRequest",
                                    "message": "Parsing OData Select and Expand failed"}});
     Mock::given(method("GET"))
@@ -219,8 +213,55 @@ async fn a_refused_attachment_listing_keeps_the_body() {
         .expect(1)
         .mount(&g.server)
         .await;
+}
+
+#[tokio::test]
+async fn a_refused_listing_asked_for_on_a_cid_alone_keeps_the_body() {
+    let g = Graph::start().await;
+    let html = "<p>Hello</p><img src=\"cid:logo@x\">";
+    let answer = json!({"id": "m1", "hasAttachments": false,
+                        "body": {"contentType": "html", "content": html}});
+    serve_body(&g, "m1", answer).await;
+    refuse_the_listing(&g).await;
     let body = g.provider().body("m1").await.unwrap();
     assert!(body.text.contains("Hello"), "{:?}", body.text);
     assert_eq!(body.html.as_deref(), Some(html));
     assert!(body.attachments.is_empty());
+}
+
+#[tokio::test]
+async fn a_refused_listing_graph_said_has_attachments_fails_the_fetch() {
+    let g = Graph::start().await;
+    // Stored as fetched with no attachments, they would never be listed again.
+    let html = "<p>Hello</p><img src=\"cid:logo@x\">";
+    let answer = json!({"id": "m1", "hasAttachments": true,
+                        "body": {"contentType": "html", "content": html}});
+    serve_body(&g, "m1", answer).await;
+    refuse_the_listing(&g).await;
+    let error = g.provider().body("m1").await.unwrap_err();
+    assert!(
+        matches!(error, ProviderError::Permanent { .. }),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_upper_case_cid_lists_the_inline_parts_too() {
+    let g = Graph::start().await;
+    let answer = json!({"id": "m1", "hasAttachments": false,
+                        "body": {"contentType": "html", "content": "<img src=\"CID:logo@x\">"}});
+    serve_body(&g, "m1", answer).await;
+    let listed = json!({"value": [
+        {"@odata.type": "#microsoft.graph.fileAttachment", "id": "a1", "name": "logo.png",
+         "contentType": "image/png", "size": 10, "isInline": true, "contentId": "logo@x"}
+    ]});
+    Mock::given(method("GET"))
+        .and(path(format!("{ROOT}/me/messages/m1/attachments")))
+        .and(query_param("$select", LISTED))
+        .respond_with(ResponseTemplate::new(200).set_body_json(listed))
+        .expect(1)
+        .mount(&g.server)
+        .await;
+    let body = g.provider().body("m1").await.unwrap();
+    assert_eq!(body.attachments.len(), 1);
 }

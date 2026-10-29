@@ -227,12 +227,46 @@ impl Reader {
     }
 
     /// The HTML of message `id` read for rich mode; `None` (no HTML part, or the read failed)
-    /// leaves it plain.
+    /// leaves it plain. The cursor stays on its line of text: a fold rich mode draws where the
+    /// plain text had none moves the lines under it.
     pub fn rich_read(&mut self, id: i64, body: Option<RichBody>) {
-        if let Some(body) = body {
-            self.rich_bodies.insert(id, Rc::new(body));
-            self.changed();
+        let Some(mut body) = body else { return };
+        let stored = self.detail.messages.iter().find(|m| m.id == id);
+        if let Some(BodyState::Text { text, .. }) = stored.map(|m| &m.body) {
+            body = body.noting_cut(text);
         }
+        let (line, anchor) = (self.line_anchor(), self.anchor());
+        self.rich_bodies.insert(id, Rc::new(body));
+        self.changed();
+        match line.and_then(|line| self.find_line(&line)) {
+            Some(at) => self.cursor = at,
+            None => self.restore(anchor),
+        }
+        self.scroll =
+            crate::tui::screens::mail::visible_offset(self.scroll, self.cursor, self.page());
+    }
+
+    /// The cursor's line as text: its message's index, its text, and how many lines of that
+    /// message above it read the same.
+    fn line_anchor(&self) -> Option<(usize, String, usize)> {
+        let lines = self.current();
+        let line = lines.get(self.cursor)?;
+        let message = line.kind.message()?;
+        let same = lines[..self.cursor]
+            .iter()
+            .filter(|l| l.kind.message() == Some(message) && l.text() == line.text())
+            .count();
+        Some((message, line.text().to_string(), same))
+    }
+
+    /// Where `line_anchor`'s line is now, if it is still drawn.
+    fn find_line(&self, (message, text, same): &(usize, String, usize)) -> Option<usize> {
+        self.current()
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.kind.message() == Some(*message) && l.text() == text)
+            .nth(*same)
+            .map(|(at, _)| at)
     }
 
     pub fn thread_id(&self) -> i64 {
