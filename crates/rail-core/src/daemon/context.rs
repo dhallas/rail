@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use url::Url;
 
+use super::handlers::inline_refresh::InlineRefreshes;
 use super::pending::PendingTable;
 use crate::auth::{ItemIdCache, http_client};
 use crate::config::lock::lock_config;
@@ -41,6 +42,8 @@ pub struct DaemonContext {
     config_lock: Mutex<()>,
     /// Logins and consents waiting on the user.
     pub(crate) pending: PendingTable,
+    /// Messages whose body `attachment.image` fetched again for a missing Content-ID.
+    pub(crate) inline_refreshes: InlineRefreshes,
     /// Tests hold a save at its start to prove a disconnect cannot stop it.
     #[cfg(any(test, feature = "test-gates"))]
     pub save_gate: Arc<SaveGate>,
@@ -121,11 +124,19 @@ impl DaemonContext {
             op_ids: ItemIdCache::default(),
             config_lock: Mutex::new(()),
             pending: PendingTable::default(),
+            inline_refreshes: InlineRefreshes::default(),
             #[cfg(any(test, feature = "test-gates"))]
             save_gate: Arc::new(SaveGate::default()),
             #[cfg(any(test, feature = "test-gates"))]
             begin_gate: Arc::new(BeginGate::default()),
         })
+    }
+
+    /// Shorten how long a failed inline-picture body refresh is shared before a retry.
+    #[cfg(test)]
+    pub(crate) fn with_inline_refresh_cooldown(mut self, cooldown: std::time::Duration) -> Self {
+        self.inline_refreshes = InlineRefreshes::with_cooldown(cooldown);
+        self
     }
 
     /// Replace the provider's token endpoint. Honoured in debug builds only.

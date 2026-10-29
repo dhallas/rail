@@ -118,6 +118,8 @@ pub mod names {
     pub const PENDING_FINISHED: &str = "pending.finished";
 
     /// Sent, to connections that asked with `sync.now { watch: true }`, on every status change.
+    /// It may also be sent with the status unchanged when the store changed under an open
+    /// reader (an inline picture's body refresh wrote a body), so a front end reads it again.
     pub const SYNC_PROGRESS: &str = "sync.progress";
 
     /// Sent, on the same watch as `sync.progress`, when Gmail refused an action for good.

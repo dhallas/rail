@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::client::DaemonClient;
-use super::{Connector, ServeConfig};
+use super::{Connector, DaemonContext, ServeConfig};
 use crate::ops::op::{ActionUndo, DaemonStop, DraftDiscard, DraftSave, DraftSend, SyncStatus};
 use crate::ops::{
     ActionUndoRequest, DaemonStopRequest, DraftAttachment, DraftDiscardRequest, DraftId,
@@ -36,6 +36,11 @@ pub(super) struct DaemonHarness {
 impl DaemonHarness {
     /// A synced daemon whose store holds m1 (thread t1), m2 and m3.
     pub(super) async fn new() -> Self {
+        Self::new_with(|ctx| ctx).await
+    }
+
+    /// `new`, its context changed by `configure` before the daemon starts.
+    pub(super) async fn new_with(configure: fn(DaemonContext) -> DaemonContext) -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let paths = Paths::all_in(tmp.path());
         std::fs::create_dir_all(&paths.config_dir).unwrap();
@@ -58,7 +63,7 @@ impl DaemonHarness {
             message_id: Some("m3;x@example.com".into()),
             ..envelope("m3", "t3", now - 3_000)
         });
-        Self::boot(tmp, paths, mock).await
+        Self::boot_with(tmp, paths, mock, configure).await
     }
 
     /// `new`, with an attachment (part `p1`) stored for m1.
@@ -78,9 +83,18 @@ impl DaemonHarness {
     }
 
     pub(super) async fn boot(tmp: tempfile::TempDir, paths: Paths, mock: MockProvider) -> Self {
+        Self::boot_with(tmp, paths, mock, |ctx| ctx).await
+    }
+
+    async fn boot_with(
+        tmp: tempfile::TempDir,
+        paths: Paths,
+        mock: MockProvider,
+        configure: fn(DaemonContext) -> DaemonContext,
+    ) -> Self {
         let (ctx, _) = daemon_context(&paths);
         let task = start_daemon(
-            ctx.with_provider_factory(mock_factory(&mock)),
+            configure(ctx).with_provider_factory(mock_factory(&mock)),
             ServeConfig::default(),
         )
         .await;

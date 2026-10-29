@@ -451,8 +451,9 @@ its bold and headings bold, its italics italic, its quotes dimmed and its links 
 (`rich_html = false` under `[general]` or `:rich-html` shows that text without the styles), with
 its inline pictures (the ones the message itself carries, at the size it asks for; `[image: …]`
 until they arrive, and for any past the first 32 in an open thread; pictures of a few pixels, such
-as tracking pixels, left out; remote pictures are never fetched; `images = false` or `:images`
-leaves them all out), and with each link as a
+as tracking pixels, left out; remote pictures are never fetched; mail stored by a Rail older than
+0.4.0 gains its pictures the first time it is opened, with one more fetch of that message;
+`images = false` or `:images` leaves them all out), and with each link as a
 numbered marker such as `[1]`; in terminals that support hyperlinks (iTerm2, WezTerm, kitty, Ghostty, VS Code, Windows
 Terminal, Hyper, foot, Alacritty, GNOME Terminal and other VTE terminals; not inside tmux or
 screen) the marker is clickable; while a box such as help or a confirmation is open the markers
