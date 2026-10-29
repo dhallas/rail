@@ -6,6 +6,14 @@ All notable changes to Rail are recorded here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Inline pictures of mail stored before 0.4.0 show the first time the message is opened: Rail
+  fetches that message once more to learn its pictures' Content-IDs, and that message's attachment
+  details are corrected then, including ones Rail kept after Microsoft 365 refused its attachment
+  list. Messages without inline pictures are not fetched again, so their attachment details stay
+  as stored (#125).
+
 ## [0.4.0] - 2026-10-29
 
 HTML mail with its styles and inline pictures, and Microsoft 365 folders that have subfolders,

@@ -1,11 +1,12 @@
 //! `attachment.image`: one inline picture fetched into `images_dir()`, a 0700 directory of
 //! 0600 files named by a hash of the account, message and Content-ID, so the same picture is
-//! answered from disk the next time. Refused before any fetch when the store lists no such
-//! part, its type is not one the reader draws or its listed size is over the cap; refused
-//! after it when the bytes are over the cap or lack their type's signature, and nothing is
-//! written then. Each write is a temporary file renamed into place, after a sweep of pictures
-//! older than `IMAGE_STALE_AFTER`; a copy answered from disk has its age started again first.
-//! Logs carry error kinds only.
+//! answered from disk the next time. When the store lists no such part, the message's body is
+//! fetched again once (`inline_refresh`) and the part looked up again. Refused before any
+//! picture fetch when the store still lists no such part, its type is not one the reader draws
+//! or its listed size is over the cap; refused after it when the bytes are over the cap or lack
+//! their type's signature, and nothing is written then. Each write is a temporary file renamed
+//! into place, after a sweep of pictures older than `IMAGE_STALE_AFTER`; a copy answered from
+//! disk has its age started again first. Logs carry error kinds only.
 
 use std::path::Path;
 use std::time::SystemTime;
@@ -13,6 +14,7 @@ use std::time::SystemTime;
 use sha2::{Digest, Sha256};
 
 use super::attachments::{create_new_private, sweep_token, write_synced};
+use super::inline_refresh::refresh_once;
 use crate::auth::random_token;
 use crate::daemon::DaemonContext;
 use crate::daemon::registry::Call;
@@ -38,7 +40,15 @@ pub(super) async fn image(
     };
     // The writer opens (and migrates) the store; the handle is not kept.
     call.ctx.sync.writer(&call.ctx).await?;
-    let part = inline_part(&call.ctx, target.account_id, &request).await?;
+    let part = match inline_part(&call.ctx, target.account_id, &request).await? {
+        Some(part) => part,
+        None => {
+            refresh_once(&call.ctx, &target, &request.message_id).await?;
+            inline_part(&call.ctx, target.account_id, &request)
+                .await?
+                .ok_or_else(no_such_part)?
+        }
+    };
     let extension = image_extension(&part.mime_type).ok_or_else(not_drawn)?;
     if part.size > MAX_IMAGE_BYTES {
         return Err(too_large());
@@ -85,15 +95,18 @@ async fn inline_part(
     ctx: &DaemonContext,
     account_id: i64,
     request: &AttachmentImageRequest,
-) -> Result<AttachmentView, OpError> {
+) -> Result<Option<AttachmentView>, OpError> {
     let db = ctx.paths.db_file();
     let (message, content_id) = (request.message_id.clone(), request.content_id.clone());
     ctx.blocking(move || {
         Ok(Store::open_reader(&db)?.inline_part(account_id, &message, &content_id)?)
     })
-    .await?
-    // Never the Content-ID: it is the sender's text, and the front end already knows it.
-    .ok_or_else(|| OpError::not_found("this message has no such inline picture"))
+    .await
+}
+
+/// Never the Content-ID: it is the sender's text, and the front end already knows it.
+fn no_such_part() -> OpError {
+    OpError::not_found("this message has no such inline picture")
 }
 
 /// The hex SHA-256 of the account, message and Content-ID: a file name that says nothing of

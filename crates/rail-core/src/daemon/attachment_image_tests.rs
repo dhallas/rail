@@ -1,7 +1,8 @@
 //! `attachment.image` through a real daemon over the fake Gmail: the cached copy (private,
 //! named by a hash, answered again without a second fetch), and the refusals an unknown
 //! Content-ID, a type the reader does not draw, a picture over the cap and bytes that are not
-//! what they claim get, each before anything is written.
+//! what they claim get, each before anything is written; and the one body refresh a message
+//! stored without Content-IDs gets (#125).
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -9,14 +10,16 @@ use std::path::PathBuf;
 use super::attachments_tests::{
     age, attachment_calls, bytes_at, entries, fetch_policies, fixture, nothing_written,
 };
-use super::draft_tests::DaemonHarness;
+use super::draft_tests::{BOUND, DaemonHarness};
 use crate::error::ErrorClass;
-use crate::ops::op::AttachmentImage;
+use crate::ops::op::{AttachmentImage, SyncNow};
 use crate::ops::{
-    AttachmentImageRequest, AttachmentImageResponse, CONTENT_MISMATCH, ErrorCode, MAX_IMAGE_BYTES,
-    OpError,
+    AccountSyncStatus, AttachmentImageRequest, AttachmentImageResponse, CONTENT_MISMATCH,
+    ErrorCode, MAX_IMAGE_BYTES, OpError, SyncNowRequest, names,
 };
 use crate::provider::http::RetryPolicy;
+use crate::provider::mock::Call;
+use crate::provider::{AttachmentMeta, Body, ProviderError};
 use crate::store::Store;
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
@@ -170,4 +173,324 @@ async fn a_cached_picture_answered_again_is_not_swept_by_the_next_fetch() {
     image(&h, "other@x").await.unwrap();
     assert!(path.is_file(), "{:?}", entries(&h.paths.images_dir()));
     assert_eq!(attachment_calls(&h), before + 2, "the hit was not fetched");
+}
+
+// Mail stored before schema v11 (or kept after Microsoft 365 refused a list, #125) has its
+// attachment rows without a Content-ID: the first ask fetches the body once more.
+
+const STALE_HTML: &str = "<p>Hi</p><img src=\"CID:logo@x\">";
+
+/// m1 as it was stored before Content-IDs were kept: HTML naming `cid:logo@x`, its picture
+/// listed with no Content-ID and as a plain file.
+fn stored_before_v11(h: &DaemonHarness, html: &str) {
+    let message = h.message_id("m1");
+    let store = Store::open(&h.paths.db_file()).unwrap();
+    store
+        .conn()
+        .execute(
+            "UPDATE messages SET body_text = 'stored text', body_html = ?2,
+                                 body_fetched_at = 1 WHERE id = ?1",
+            rusqlite::params![message, html],
+        )
+        .unwrap();
+    store
+        .conn()
+        .execute(
+            "INSERT INTO attachments (message_id, remote_part_id, filename, mime_type, size,
+                                      plain_file, content_id)
+             VALUES (?1, '0.2', 'image001.png', 'image/png', 16, 1, NULL)",
+            [message],
+        )
+        .unwrap();
+}
+
+/// What the provider lists for m1 now: the picture with its Content-ID, and another.
+fn listed_now(h: &DaemonHarness, content_ids: &[&str]) {
+    let attachments = content_ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| AttachmentMeta {
+            part_id: format!("0.{}", i + 2),
+            filename: format!("image00{i}.png"),
+            mime_type: "image/png".into(),
+            size: 16,
+            plain_file: false,
+            content_id: Some((*id).to_string()),
+        })
+        .collect();
+    h.mock.with(|m| {
+        m.bodies.insert(
+            "m1".into(),
+            Body {
+                text: "fresh text".into(),
+                html: Some(STALE_HTML.into()),
+                attachments,
+                ..Body::default()
+            },
+        );
+    });
+    for i in 0..content_ids.len() {
+        bytes_at(h, &format!("0.{}", i + 2), PNG.to_vec());
+    }
+}
+
+fn body_calls(h: &DaemonHarness) -> usize {
+    h.mock.calls().iter().filter(|c| **c == Call::Body).count()
+}
+
+fn stored_text(h: &DaemonHarness) -> String {
+    h.store(|s| {
+        s.conn()
+            .query_row(
+                "SELECT body_text FROM messages WHERE remote_id = 'm1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+    })
+}
+
+fn assert_not_found(error: &OpError) {
+    assert_eq!(
+        (error.code, error.class),
+        (ErrorCode::NotFound, ErrorClass::Permanent),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_picture_of_mail_stored_before_content_ids_refreshes_its_body_once() {
+    let (h, _dest) = fixture().await;
+    stored_before_v11(&h, STALE_HTML);
+    listed_now(&h, &["logo@x"]);
+    let before = body_calls(&h);
+
+    let answer = image(&h, "logo@x").await.unwrap();
+    assert_eq!(std::fs::read(&answer.path).unwrap(), PNG);
+    assert_eq!(body_calls(&h), before + 1, "one body fetch");
+    let row: (Option<String>, bool) = h.store(|s| {
+        s.conn()
+            .query_row(
+                "SELECT content_id, plain_file FROM attachments WHERE remote_part_id = '0.2'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+    });
+    assert_eq!(row, (Some("logo@x".to_string()), false));
+    let body_policy = h.mock.with(|m| {
+        m.policies
+            .iter()
+            .rev()
+            .find(|(call, _)| *call == Call::Body)
+            .map(|(_, policy)| *policy)
+    });
+    assert_eq!(body_policy, Some(Some(RetryPolicy::interactive())));
+
+    image(&h, "logo@x").await.unwrap();
+    assert_eq!(body_calls(&h), before + 1, "not fetched again");
+}
+
+#[tokio::test]
+async fn concurrent_asks_for_one_messages_pictures_fetch_its_body_once() {
+    let (h, _dest) = fixture().await;
+    stored_before_v11(&h, STALE_HTML);
+    listed_now(&h, &["logo@x", "a@x", "b@x", "c@x"]);
+    h.mock
+        .with(|m| m.body_delay = std::time::Duration::from_millis(300));
+    let before = body_calls(&h);
+
+    let asks = ["logo@x", "a@x", "b@x", "c@x"].map(|id| image(&h, id));
+    for answer in futures_util::future::join_all(asks).await {
+        answer.unwrap();
+    }
+    assert_eq!(body_calls(&h), before + 1);
+}
+
+#[tokio::test]
+async fn a_refreshed_list_without_the_content_id_is_not_found_and_not_fetched_again() {
+    let (h, _dest) = fixture().await;
+    stored_before_v11(&h, STALE_HTML);
+    // Gmail lists an inline part without a filename with no Content-ID Rail keeps.
+    listed_now(&h, &[]);
+    let before = body_calls(&h);
+
+    assert_not_found(&image(&h, "logo@x").await.expect_err("still none"));
+    assert_eq!(body_calls(&h), before + 1);
+    assert_eq!(
+        stored_text(&h),
+        "fresh text",
+        "the refreshed body was written"
+    );
+    assert_not_found(&image(&h, "logo@x").await.expect_err("still none"));
+    assert_eq!(body_calls(&h), before + 1, "once per message per run");
+}
+
+#[tokio::test]
+async fn a_transient_body_error_is_answered_and_an_ask_after_the_cooldown_tries_again() {
+    let h =
+        DaemonHarness::new_with(|ctx| ctx.with_inline_refresh_cooldown(std::time::Duration::ZERO))
+            .await;
+    stored_before_v11(&h, STALE_HTML);
+    listed_now(&h, &["logo@x"]);
+    h.mock
+        .fail_next(Call::Body, ProviderError::transient("the server is busy"));
+    let before = body_calls(&h);
+
+    let error = image(&h, "logo@x").await.expect_err("transient");
+    assert_eq!(error.class, ErrorClass::Transient, "{error:?}");
+    assert_eq!(body_calls(&h), before + 1);
+
+    image(&h, "logo@x").await.unwrap();
+    assert_eq!(body_calls(&h), before + 2, "tried again");
+}
+
+#[tokio::test]
+async fn an_unreadable_body_leaves_the_stored_one_and_is_not_fetched_again() {
+    let (h, _dest) = fixture().await;
+    stored_before_v11(&h, STALE_HTML);
+    h.mock.with(|m| m.broken.insert("m1".into()));
+    let before = body_calls(&h);
+
+    assert_not_found(&image(&h, "logo@x").await.expect_err("unreadable"));
+    assert_eq!(body_calls(&h), before + 1);
+    assert_eq!(
+        stored_text(&h),
+        "stored text",
+        "no unreadable marker over it"
+    );
+    assert_not_found(&image(&h, "logo@x").await.expect_err("unreadable"));
+    assert_eq!(body_calls(&h), before + 1);
+}
+
+#[tokio::test]
+async fn a_message_whose_html_names_no_cid_is_never_refreshed() {
+    let (h, _dest) = fixture().await;
+    stored_before_v11(&h, "<p>no pictures, cid without a colon</p>");
+    listed_now(&h, &["logo@x"]);
+    let before = body_calls(&h);
+
+    assert_not_found(&image(&h, "logo@x").await.expect_err("nothing to refresh"));
+    let request = AttachmentImageRequest {
+        account: "work".into(),
+        message_id: "nobody".into(),
+        content_id: "logo@x".into(),
+    };
+    let error = h
+        .call::<AttachmentImage>(&request)
+        .await
+        .expect_err("no such message");
+    assert_not_found(&error);
+    assert_eq!(body_calls(&h), before);
+}
+
+#[tokio::test]
+async fn a_refreshed_body_tells_sync_progress_watchers_so_the_reader_reads_it_again() {
+    let (h, _dest) = fixture().await;
+    stored_before_v11(&h, STALE_HTML);
+    listed_now(&h, &["logo@x"]);
+    let mut notes = h.client.notifications();
+    let watch = SyncNowRequest {
+        account: None,
+        watch: true,
+    };
+    h.call::<SyncNow>(&watch).await.unwrap();
+    // Let the pass sync.now started end first: its own notes say nothing here.
+    tokio::time::timeout(BOUND, async {
+        loop {
+            let note = notes.recv().await.unwrap();
+            let status: AccountSyncStatus = serde_json::from_value(note.params).unwrap();
+            if !status.pass_running && status.passes_completed > 1 {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("the pass ended");
+
+    image(&h, "logo@x").await.unwrap();
+    let note = tokio::time::timeout(std::time::Duration::from_secs(2), notes.recv())
+        .await
+        .expect("a progress note after the refresh")
+        .unwrap();
+    assert_eq!(note.method, names::SYNC_PROGRESS);
+}
+
+#[tokio::test]
+async fn concurrent_asks_share_one_transient_failure() {
+    let (h, _dest) = fixture().await;
+    stored_before_v11(&h, STALE_HTML);
+    listed_now(&h, &["logo@x", "a@x", "b@x", "c@x"]);
+    h.mock
+        .with(|m| m.body_delay = std::time::Duration::from_millis(300));
+    for _ in 0..4 {
+        h.mock
+            .fail_next(Call::Body, ProviderError::transient("the server is busy"));
+    }
+    let before = body_calls(&h);
+
+    let asks = ["logo@x", "a@x", "b@x", "c@x"].map(|id| image(&h, id));
+    for answer in futures_util::future::join_all(asks).await {
+        let error = answer.expect_err("transient");
+        assert_eq!(error.class, ErrorClass::Transient, "{error:?}");
+    }
+    assert_eq!(body_calls(&h), before + 1, "one fetch, its failure shared");
+    let error = image(&h, "logo@x").await.expect_err("within the cooldown");
+    assert_eq!(error.class, ErrorClass::Transient, "{error:?}");
+    assert_eq!(
+        body_calls(&h),
+        before + 1,
+        "not fetched within the cooldown"
+    );
+}
+
+#[tokio::test]
+async fn a_message_gone_at_the_provider_is_not_found_unwritten_and_not_fetched_again() {
+    let (h, _dest) = fixture().await;
+    stored_before_v11(&h, STALE_HTML);
+    h.mock.fail_next(Call::Body, ProviderError::NotFound);
+    let before = body_calls(&h);
+
+    assert_not_found(&image(&h, "logo@x").await.expect_err("gone"));
+    assert_eq!(stored_text(&h), "stored text");
+    assert_not_found(&image(&h, "logo@x").await.expect_err("gone"));
+    assert_eq!(body_calls(&h), before + 1);
+}
+
+#[tokio::test]
+async fn a_refreshed_body_whose_list_is_refused_keeps_the_old_rows() {
+    let (h, _dest) = fixture().await;
+    stored_before_v11(&h, STALE_HTML);
+    h.mock.with(|m| {
+        m.bodies.insert(
+            "m1".into(),
+            Body {
+                text: "fresh text".into(),
+                html: Some(STALE_HTML.into()),
+                attachments_unknown: true,
+                ..Body::default()
+            },
+        );
+    });
+    let before = body_calls(&h);
+
+    assert_not_found(&image(&h, "logo@x").await.expect_err("still unlisted"));
+    assert_eq!(stored_text(&h), "fresh text", "the body was written");
+    let rows: Vec<(String, Option<String>, bool)> = h.store(|s| {
+        let mut stmt = s
+            .conn()
+            .prepare(
+                "SELECT a.remote_part_id, a.content_id, a.plain_file FROM attachments a
+                 JOIN messages m ON m.id = a.message_id WHERE m.remote_id = 'm1'
+                 AND a.remote_part_id = '0.2'",
+            )
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    });
+    assert_eq!(rows, [("0.2".to_string(), None, true)], "the old row stays");
+    assert_not_found(&image(&h, "logo@x").await.expect_err("still unlisted"));
+    assert_eq!(body_calls(&h), before + 1);
 }

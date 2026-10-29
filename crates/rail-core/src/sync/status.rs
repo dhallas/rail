@@ -43,7 +43,9 @@ impl StatusBoard {
         self.lock().accounts.remove(&address.to_ascii_lowercase());
     }
 
-    /// Change one account's status and tell every subscriber.
+    /// Change one account's status and tell every subscriber. A change that leaves it as it
+    /// was still tells them: `attachment.image` does that after a body refresh so the reader
+    /// reads its open thread again.
     pub fn update(&self, address: &str, change: impl FnOnce(&mut AccountSyncStatus)) {
         let mut inner = self.lock();
         let Some(status) = inner.accounts.get_mut(&address.to_ascii_lowercase()) else {

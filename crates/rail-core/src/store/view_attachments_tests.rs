@@ -191,3 +191,51 @@ fn migration_eleven_adds_content_id_to_a_version_ten_store() {
         .unwrap();
     assert_eq!(id, None);
 }
+
+/// `names_cid`: only a message of that account whose stored HTML has a `cid:` address, in any
+/// case; one without HTML, without one, of another account or not stored names none.
+#[test]
+fn names_cid_finds_a_cid_address_in_the_stored_html() {
+    let mut store = seeded();
+    let upserts = ["m1", "m2", "m3"]
+        .iter()
+        .enumerate()
+        .map(|(i, id)| envelope(id, &format!("t{i}"), BASE_MS))
+        .collect();
+    store
+        .apply(
+            &Batch {
+                upserts,
+                ..Batch::new(1)
+            },
+            NOW,
+        )
+        .unwrap();
+    let html = |id: &str, html: Option<&str>| {
+        let body = Body {
+            text: "hi".into(),
+            html: html.map(Into::into),
+            ..Body::default()
+        };
+        (id.to_string(), body)
+    };
+    let bodies = vec![
+        html("m1", Some("<img src=\"CID:logo@x\">")),
+        html("m2", Some("<p>a cid without its colon</p>")),
+        html("m3", None),
+    ];
+    store
+        .apply(
+            &Batch {
+                bodies,
+                ..Batch::new(1)
+            },
+            NOW,
+        )
+        .unwrap();
+    assert!(store.names_cid(1, "m1").unwrap());
+    assert!(!store.names_cid(1, "m2").unwrap());
+    assert!(!store.names_cid(1, "m3").unwrap());
+    assert!(!store.names_cid(2, "m1").unwrap(), "another account");
+    assert!(!store.names_cid(1, "nobody").unwrap());
+}

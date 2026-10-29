@@ -50,6 +50,30 @@ pub async fn run(
     }))
 }
 
+/// Fetch one body again, stored or not, and write it as `run` does: the refresh an inline
+/// picture's ask makes for a message stored without Content-IDs (#125). A body the provider
+/// cannot read leaves the stored one in place (`Unreadable`), instead of the marker `run`
+/// stores for one it never had; any other failure is `Failed`, and nothing is written.
+pub(crate) async fn refetch(
+    ctx: &DaemonContext,
+    target: &SearchTarget,
+    id: &RemoteId,
+) -> Result<BodyOutcome, OpError> {
+    let result = unobserved(target.provider.body(id)).await;
+    if let Err(ProviderError::Permanent { .. }) = &result {
+        tracing::warn!(
+            account = %target.name,
+            "a body fetched again could not be read; the stored one stays"
+        );
+        return Ok(BodyOutcome::Unreadable);
+    }
+    let (outcome, body) = sort(&target.name, id, result);
+    if let Some(body) = body {
+        write(ctx, target.account_id, vec![(id.clone(), body)]).await?;
+    }
+    Ok(outcome)
+}
+
 fn answer(ids: &[String], mut outcome: impl FnMut(&str) -> BodyOutcome) -> BodyFetchResponse {
     BodyFetchResponse {
         results: ids

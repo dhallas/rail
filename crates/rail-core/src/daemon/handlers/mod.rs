@@ -12,6 +12,7 @@ pub(super) mod draft_files;
 mod drafts;
 mod drafts_gmail;
 mod guide;
+pub(super) mod inline_refresh;
 mod login;
 mod pending;
 mod presets;

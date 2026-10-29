@@ -588,6 +588,24 @@ impl Store {
             .optional()?)
     }
 
+    /// Whether that account's message is stored with HTML naming a `cid:` address (in any
+    /// case): only then can a picture it lacks be found by fetching its body again.
+    ///
+    /// # Errors
+    /// The store could not be read.
+    pub fn names_cid(&self, account_id: i64, remote: &str) -> Result<bool, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM messages WHERE account_id = ?1 AND remote_id = ?2
+                 AND instr(lower(body_html), 'cid:') > 0",
+                params![account_id, remote],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
     fn attach(&self, messages: &mut [MessageView]) -> Result<(), StoreError> {
         let ids: Vec<i64> = messages.iter().map(|m| m.id).collect();
         let mut stmt = self.conn.prepare(
