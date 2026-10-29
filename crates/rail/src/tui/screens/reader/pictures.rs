@@ -218,10 +218,12 @@ impl Reader {
         if self.placing().is_none() {
             return Vec::new();
         }
+        // A message gone from the thread drops its answers, so its pictures never stop loading.
+        let in_thread = |id: &i64| self.detail.messages.iter().any(|m| m.id == *id);
         let loading = self
             .pictures
-            .values()
-            .filter(|p| matches!(p, Picture::Loading))
+            .iter()
+            .filter(|((id, _), p)| matches!(p, Picture::Loading) && in_thread(id))
             .count();
         let room = MAX_PICTURES_IN_FLIGHT
             .saturating_sub(loading)

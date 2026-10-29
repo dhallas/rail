@@ -15,7 +15,7 @@ use super::pictures::{
     MAX_PICTURES_PER_READER, Picture, content_id, decode, fit,
 };
 use super::rich::{Placing, from_html, lines};
-use super::test_threads::{four, reader_of};
+use super::test_threads::{four, message, person, reader_of};
 
 /// Cells of 8 by 16 pixels, as many terminals have.
 const FONT: (u16, u16) = (8, 16);
@@ -217,4 +217,26 @@ fn a_picture_keeps_one_encoding_whatever_sizes_it_is_drawn_at() {
         assert!(reader.protocol(3, 0, cols, rows).is_some());
         assert_eq!(reader.protocols.borrow().len(), 1);
     }
+}
+
+#[test]
+fn pictures_of_a_message_gone_from_the_thread_do_not_hold_up_the_rest() {
+    let mut reader = reader_with_pictures(MAX_PICTURES_IN_FLIGHT);
+    let wanted = reader.pictures_wanted();
+    assert_eq!(wanted.len(), MAX_PICTURES_IN_FLIGHT);
+    reader.mark_pictures_asked(&wanted);
+    // The newest message leaves the thread while its pictures load (their answers are
+    // dropped), and a new one with pictures arrives.
+    let mut detail = four(0);
+    detail.messages.pop();
+    detail.messages.push(message(
+        5,
+        person(None, "x@example.com"),
+        1_760_080_000,
+        "New.",
+    ));
+    reader.refresh(detail);
+    let html = r#"<p>New</p><img src="cid:new@x" width="160" height="64">"#;
+    reader.rich_read(5, Some(from_html(html)));
+    assert_eq!(reader.pictures_wanted().len(), 1);
 }
