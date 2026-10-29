@@ -58,6 +58,7 @@ impl Setup {
             headers: self.headers,
             order: self.order,
             read_error: self.read_error.as_deref(),
+            rich: None,
         };
         cards::build(detail, &state, cols)
     }

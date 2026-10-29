@@ -63,6 +63,8 @@ pub enum Target {
     },
     /// `:search-counts`: show or hide the unread count beside each saved search.
     SearchCounts,
+    /// `:rich-html`: draw HTML bodies with their styles or as plain text.
+    RichHtml,
 }
 
 /// One entry: what it shows (raw: label names are outside text), what it is matched by, and

@@ -497,6 +497,7 @@ pub fn mail_ctx(paths: &Paths, fake: Arc<FakeDaemon>) -> MailContext {
         hints: true,
         show_clock: true,
         thread_order: ThreadOrder::Oldest,
+        rich_html: true,
         dim_read: rail_core::config::DimRead::Dot,
         hyperlinks: false,
         depth: ColorDepth::TrueColor,

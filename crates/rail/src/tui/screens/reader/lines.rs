@@ -4,12 +4,15 @@
 //! escaped text, or `escape`).
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use rail_core::config::ThreadOrder;
 use rail_core::provider::Mailbox;
+use rail_core::provider::html::Style;
 use rail_core::store::view::{BodyState, MessageView, ThreadDetail};
 
 use super::ReaderAccount;
+use super::rich::{self, RichBody};
 use crate::tui::clock::Clock;
 use crate::tui::screens::mail::Glyphs;
 use crate::tui::text::{Block, blocks, escape, expand_tabs, fit, fold_label, wrap};
@@ -82,6 +85,8 @@ pub enum Tone {
     Badge,
     /// A card's number: the text colour on the border colour.
     Number,
+    /// A stretch of an HTML body in rich mode, in its style.
+    Rich(Style),
 }
 
 /// One line, escaped and at most the width it was built for: segments, each drawn in its tone,
@@ -158,6 +163,8 @@ pub(super) struct State<'a> {
     pub order: ThreadOrder,
     /// A failed re-read's error (escaped), drawn in place of the subject.
     pub read_error: Option<&'a str>,
+    /// In rich mode, the HTML bodies read so far by message id; `None` in plain mode.
+    pub rich: Option<&'a HashMap<i64, Rc<RichBody>>>,
 }
 
 fn line(kind: LineKind, text: String, tone: Tone) -> ReaderLine {
@@ -271,8 +278,17 @@ fn body(out: &mut Vec<ReaderLine>, index: usize, m: &MessageView, state: &State<
             );
         }
         BodyState::Text { text, cut } => {
-            text_lines(out, index, text, state, width);
-            if *cut {
+            let cut = match state.rich.and_then(|bodies| bodies.get(&m.id)) {
+                Some(body) => {
+                    rich::lines(out, index, body, state.unfolded, width);
+                    body.cut
+                }
+                None => {
+                    text_lines(out, index, text, state, width);
+                    *cut
+                }
+            };
+            if cut {
                 let note = "[Rail shows the first 500,000 characters of this message.]";
                 status(out, index, note, Tone::Muted, width);
             }

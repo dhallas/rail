@@ -28,7 +28,28 @@ fn style(tone: Tone, theme: &Theme, badge: Color) -> Style {
         Tone::Accent => theme.accent.add_modifier(Modifier::BOLD),
         Tone::Badge => Style::new().fg(Color::Black).bg(badge),
         Tone::Number => number(theme),
+        Tone::Rich(look) => rich(look, theme),
     }
+}
+
+/// An HTML body's stretch: quoted text as a plain body's quotes, then bold, italic and
+/// underlined (a link) on top.
+fn rich(look: rail_core::provider::html::Style, theme: &Theme) -> Style {
+    let mut style = if look.quote {
+        theme.muted.add_modifier(Modifier::ITALIC)
+    } else {
+        theme.text
+    };
+    for (on, modifier) in [
+        (look.strong, Modifier::BOLD),
+        (look.emphasis, Modifier::ITALIC),
+        (look.link, Modifier::UNDERLINED),
+    ] {
+        if on {
+            style = style.add_modifier(modifier);
+        }
+    }
+    style
 }
 
 /// A card number's box: the theme's text colour on its border colour (a grey box in the
@@ -179,6 +200,32 @@ mod tests {
         assert_eq!(cursor.style, theme.selected);
         let text: String = cursor.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "xxxxxxxx");
+    }
+
+    #[test]
+    fn an_html_stretch_is_bold_italic_or_underlined_over_the_body_or_quote_style() {
+        use rail_core::provider::html::Style as Look;
+        let theme = Theme::default();
+        let strong_link = Look {
+            strong: true,
+            link: true,
+            ..Look::PLAIN
+        };
+        assert_eq!(
+            style(Tone::Rich(strong_link), &theme, Color::Yellow),
+            theme
+                .text
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+        );
+        let quoted = Look {
+            quote: true,
+            emphasis: true,
+            ..Look::PLAIN
+        };
+        assert_eq!(
+            style(Tone::Rich(quoted), &theme, Color::Yellow),
+            theme.muted.add_modifier(Modifier::ITALIC)
+        );
     }
 
     #[test]

@@ -75,7 +75,8 @@ impl MailScreen {
                             account,
                             self.ctx.thread_order,
                         );
-                        self.reader = Some(reader.with_unread(unread));
+                        self.reader =
+                            Some(reader.with_unread(unread).with_rich(self.ctx.rich_html));
                         // A read landing under an open composer leaves it the keys.
                         if self.compose.is_none() {
                             self.focus = Focus::Reader;
@@ -83,6 +84,7 @@ impl MailScreen {
                     }
                 }
                 let mut effects = self.fetch_wanted();
+                effects.extend(self.load_rich());
                 effects.extend(marked);
                 effects.extend(self.resume_open());
                 effects
@@ -218,7 +220,8 @@ impl MailScreen {
             return Vec::new();
         };
         match reader.act(action) {
-            ReaderOutcome::Stay => {}
+            // Opening a message reads its HTML for rich mode.
+            ReaderOutcome::Stay => return self.load_rich(),
             ReaderOutcome::Back => return self.close_reader(),
             ReaderOutcome::FollowLink => self.follow_link(),
             ReaderOutcome::Attachments => self.attachments(),
@@ -599,6 +602,7 @@ impl MailScreen {
             Target::RenameSearch { index, name } => self.rename_search_prompt(index, &name),
             Target::RemoveSearch { index, name } => self.remove_search_confirm(index, &name),
             Target::SearchCounts => self.toggle_search_counts(),
+            Target::RichHtml => self.toggle_rich_html(),
             Target::Scope(scope) => {
                 let mut effects = self.close_reader();
                 effects.extend(self.set_scope(scope));

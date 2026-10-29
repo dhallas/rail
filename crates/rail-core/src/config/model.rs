@@ -84,6 +84,9 @@ pub struct General {
     /// sidebar. `false` leaves them out and skips the count queries. `:search-counts`
     /// toggles it.
     pub saved_search_counts: bool,
+    /// `general.rich_html`: the reader draws an HTML body's bold, italic, quoted and linked
+    /// text in their styles. `false` shows the plain text. `:rich-html` toggles it.
+    pub rich_html: bool,
 }
 
 impl Default for General {
@@ -107,6 +110,7 @@ impl Default for General {
             bulk_confirm: 50,
             attachment_dir: None,
             saved_search_counts: true,
+            rich_html: true,
         }
     }
 }

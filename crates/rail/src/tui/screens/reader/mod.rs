@@ -11,6 +11,9 @@ mod keys_tests;
 mod lines;
 #[cfg(test)]
 mod lines_tests;
+mod rich;
+#[cfg(test)]
+mod rich_tests;
 #[cfg(test)]
 mod test_threads;
 #[cfg(test)]
@@ -27,6 +30,7 @@ use rail_core::store::view::{BodyState, MessageView, ThreadDetail};
 use ratatui::style::Color;
 
 pub use lines::{LineKind, ReaderLine, Tone};
+pub use rich::{RichBody, from_html};
 
 use crate::tui::clock::Clock;
 use crate::tui::keys::Action;
@@ -107,6 +111,14 @@ pub struct Reader {
     asked: HashSet<i64>,
     /// Escaped error text per message id.
     errors: HashMap<i64, String>,
+    /// HTML bodies drawn with their styles (`rich_html`, `:rich-html`); off, every body is
+    /// the plain text.
+    rich: bool,
+    /// The HTML bodies read so far, by message id.
+    rich_bodies: HashMap<i64, Rc<RichBody>>,
+    /// Message ids whose HTML was asked for: never asked twice while the reader is open. One
+    /// with no HTML, or whose read failed, stays plain.
+    rich_asked: HashSet<i64>,
     /// The last re-read failed: the subject line shows this (escaped) until a read succeeds.
     read_error: Option<String>,
     cursor: usize,
@@ -156,6 +168,9 @@ impl Reader {
             fetching: HashSet::new(),
             asked: HashSet::new(),
             errors: HashMap::new(),
+            rich: false,
+            rich_bodies: HashMap::new(),
+            rich_asked: HashSet::new(),
             read_error: None,
             cursor: 0,
             scroll: 0,
@@ -170,6 +185,54 @@ impl Reader {
     pub fn with_unread(mut self, ids: HashSet<i64>) -> Self {
         self.unread_at_open = ids;
         self
+    }
+
+    /// The reader with HTML bodies drawn rich (`on`) or plain.
+    pub fn with_rich(mut self, on: bool) -> Self {
+        self.rich = on;
+        self
+    }
+
+    /// HTML bodies drawn rich (`on`) or plain from now on (`:rich-html`); the cursor goes to the
+    /// start of the message it was in, since the lines change under it.
+    pub fn set_rich(&mut self, on: bool) {
+        if on == self.rich {
+            return;
+        }
+        let message = self.message_near();
+        self.rich = on;
+        self.changed();
+        self.land(message);
+        self.scroll =
+            crate::tui::screens::mail::visible_offset(self.scroll, self.cursor, self.page());
+    }
+
+    /// In rich mode, the open messages whose HTML part is stored and not asked for yet.
+    pub fn rich_wanted(&self) -> Vec<i64> {
+        if !self.rich {
+            return Vec::new();
+        }
+        self.detail
+            .messages
+            .iter()
+            .zip(&self.expanded)
+            .filter(|(m, open)| **open && m.has_html && matches!(m.body, BodyState::Text { .. }))
+            .map(|(m, _)| m.id)
+            .filter(|id| !self.rich_asked.contains(id))
+            .collect()
+    }
+
+    pub fn mark_rich_asked(&mut self, ids: &[i64]) {
+        self.rich_asked.extend(ids.iter().copied());
+    }
+
+    /// The HTML of message `id` read for rich mode; `None` (no HTML part, or the read failed)
+    /// leaves it plain.
+    pub fn rich_read(&mut self, id: i64, body: Option<RichBody>) {
+        if let Some(body) = body {
+            self.rich_bodies.insert(id, Rc::new(body));
+            self.changed();
+        }
     }
 
     pub fn thread_id(&self) -> i64 {
@@ -429,6 +492,7 @@ impl Reader {
             headers: self.headers,
             order: self.order,
             read_error: self.read_error.as_deref(),
+            rich: self.rich.then_some(&self.rich_bodies),
         };
         let built = Rc::new(cards::build(
             &self.detail,

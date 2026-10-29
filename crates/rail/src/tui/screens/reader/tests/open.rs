@@ -46,7 +46,7 @@ async fn o_confirms_once_names_remote_images_and_removes_the_file_on_close() {
     let files = file_paths(&f.opened);
     assert_eq!(files.len(), 1);
     let written = std::fs::read_to_string(&files[0]).unwrap();
-    assert!(written.ends_with("<p>Hi Dana</p>"), "{written}");
+    assert!(written.ends_with(super::HTML), "{written}");
     assert!(files[0].starts_with(f.paths.cache_dir.join("open")));
     keys(&mut f, "o").await;
     assert_eq!(
