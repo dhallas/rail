@@ -134,3 +134,13 @@ fn deep_style_nesting_stays_linear_and_short() {
             .is_some_and(|r| r.text.ends_with("zzend"))
     );
 }
+
+#[test]
+fn debug_output_names_sizes_and_styles_never_the_mail() {
+    let styled_text = html_styled(r#"<p>secret <b>plan</b> <a href="https://e.com/x">go</a></p>"#);
+    let shown = format!("{styled_text:?} {:?}", styled_text.runs[1]);
+    for mail in ["secret", "plan", "e.com", "go"] {
+        assert!(!shown.contains(mail), "{mail} in {shown}");
+    }
+    assert!(shown.contains("strong: true"), "{shown}");
+}

@@ -27,6 +27,8 @@
 //! numbered link's text and marker). Each style is a saturating count of open tags, not a
 //! stack, so stray or missing end tags cost nothing; line breaks carry no style.
 
+use std::fmt;
+
 use crate::provider::gmail::body::clean;
 use crate::provider::links::{MAX_LINK_BYTES, Numbering, Rendered};
 
@@ -182,7 +184,7 @@ impl Style {
 }
 
 /// A stretch of text in one style.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Run {
     pub text: String,
     pub style: Style,
@@ -190,10 +192,30 @@ pub struct Run {
 
 /// A body's text as styled runs, with the addresses its `[n]` markers stand for (link `n` is
 /// `links[n - 1]`). The runs joined are the body text Rail stores for the same HTML.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct Styled {
     pub runs: Vec<Run>,
     pub links: Vec<String>,
+}
+
+/// Its length and style only: the text is mail, which must never reach a log.
+impl fmt::Debug for Run {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Run")
+            .field("len", &self.text.len())
+            .field("style", &self.style)
+            .finish()
+    }
+}
+
+/// Counts and styles only, as `Run`'s.
+impl fmt::Debug for Styled {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Styled")
+            .field("runs", &self.runs)
+            .field("links", &self.links.len())
+            .finish()
+    }
 }
 
 /// `html` as plain text with link markers, and the addresses they stand for.
