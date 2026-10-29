@@ -8,6 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
+use rail_core::provider::gmail::TRUNCATED_MARKER;
 use rail_core::provider::html::{Run, Style, html_styled};
 use rail_core::store::view::MAX_SHOWN_BODY_CHARS;
 
@@ -70,6 +71,21 @@ pub(super) struct Placing<'a> {
     pub states: &'a HashMap<(i64, String), Picture>,
     pub font: (u16, u16),
     pub message_id: i64,
+}
+
+impl RichBody {
+    /// The body with the note that Rail kept only the first 10 MiB, unstyled, when the stored
+    /// text `stored` ends with it: the scanner never writes it, and the runs joined stay the
+    /// stored text.
+    pub(super) fn noting_cut(mut self, stored: &str) -> Self {
+        if !self.cut && stored.ends_with(TRUNCATED_MARKER) {
+            self.runs.push(Run {
+                text: TRUNCATED_MARKER.into(),
+                style: Style::PLAIN,
+            });
+        }
+        self
+    }
 }
 
 /// One line of the body: its stretches, unescaped.

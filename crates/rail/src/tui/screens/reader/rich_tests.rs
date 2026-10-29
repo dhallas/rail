@@ -1,13 +1,18 @@
 //! An HTML body's lines in rich mode: each stretch in its style, wrapping that keeps the
-//! styles, quoted runs folded as plain bodies fold them, outside text escaped, and the cap.
+//! styles, quoted runs folded as plain bodies fold them, outside text escaped, and the cap;
+//! a rich body arriving in an open reader keeps the cursor's line and the 10 MiB note.
 
 use std::collections::HashSet;
 
+use rail_core::config::ThreadOrder;
+use rail_core::provider::gmail::TRUNCATED_MARKER;
 use rail_core::provider::html::Style;
-use rail_core::store::view::MAX_SHOWN_BODY_CHARS;
+use rail_core::store::view::{BodyState, MAX_SHOWN_BODY_CHARS};
 
+use super::Reader;
 use super::lines::{LineKind, ReaderLine, Tone};
 use super::rich::{RichBody, from_html, lines};
+use super::test_threads::{four, reader_of};
 
 const BODY: LineKind = LineKind::Body { message: 0 };
 const STRONG: Style = Style {
@@ -118,4 +123,56 @@ fn a_body_past_the_shown_limit_is_cut_and_says_so() {
     assert_eq!(kept, MAX_SHOWN_BODY_CHARS);
     assert!(body.cut);
     assert!(!from_html("<p>short</p>").cut);
+}
+
+/// A blockquote of four lines: rich mode folds it, its stored text (no `>`) does not.
+const QUOTING: &str = "<p>Reply</p><blockquote>a<br>b<br>c<br>d</blockquote><p>Tail line</p>";
+
+fn joined(body: &RichBody) -> String {
+    body.runs.iter().map(|r| r.text.as_str()).collect()
+}
+
+/// `four`, its newest message (open under the title) an HTML one stored as `stored`, in rich
+/// mode with the HTML not read yet.
+fn rich_reader(stored: String) -> Reader {
+    let mut detail = four(0);
+    let newest = detail.messages.last_mut().unwrap();
+    newest.has_html = true;
+    newest.body = BodyState::Text {
+        text: stored,
+        cut: false,
+    };
+    reader_of(detail, ThreadOrder::Oldest).with_rich(true)
+}
+
+#[test]
+fn a_rich_body_arriving_keeps_the_cursor_on_its_line() {
+    let body = from_html(QUOTING);
+    let mut reader = rich_reader(joined(&body));
+    let lines = reader.lines(80);
+    reader.cursor = lines.iter().position(|l| l.text() == "Tail line").unwrap();
+
+    reader.rich_read(4, Some(body));
+
+    assert!(
+        reader
+            .lines(80)
+            .iter()
+            .any(|l| l.text() == "[4 quoted lines]")
+    );
+    assert_eq!(reader.cursor_line().unwrap().text(), "Tail line");
+}
+
+#[test]
+fn a_body_rail_cut_at_10_mib_says_so_in_rich_mode_too() {
+    let body = from_html(QUOTING);
+    let stored = format!("{}{TRUNCATED_MARKER}", joined(&body));
+    let mut reader = rich_reader(stored.clone());
+
+    reader.rich_read(4, Some(body));
+
+    let rich = &reader.rich_bodies[&4];
+    assert_eq!(joined(rich), stored, "the rich text is the stored text");
+    let note = TRUNCATED_MARKER.trim_start();
+    assert!(reader.lines(80).iter().any(|l| l.text() == note));
 }
