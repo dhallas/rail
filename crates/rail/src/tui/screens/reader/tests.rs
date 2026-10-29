@@ -92,6 +92,7 @@ async fn fixture_with(hyperlinks: bool, icons: Icons) -> Fixture {
             mime_type: "application/pdf".into(),
             size: 2_048,
             plain_file: true,
+            content_id: None,
         }],
         ..Body::default()
     };

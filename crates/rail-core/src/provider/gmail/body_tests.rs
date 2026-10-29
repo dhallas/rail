@@ -454,3 +454,29 @@ fn rendered_bodies_carry_their_links() {
     assert_eq!(plain.text, "go to https://a.example [1] now");
     assert_eq!(plain.links, ["https://a.example"]);
 }
+
+#[tokio::test]
+async fn an_inline_parts_content_id_is_kept_without_its_brackets_and_a_bad_one_is_dropped() {
+    let gmail = Gmail::start().await;
+    let html = b"<p>Hi</p><img src=\"cid:logo@x\">";
+    let payload = json!({
+        "partId": "", "mimeType": "multipart/related", "filename": "", "headers": [], "body": {"size": 0},
+        "parts": [
+            {"partId": "0", "mimeType": "text/html", "filename": "", "headers": [],
+             "body": {"size": html.len(), "data": b64(html)}},
+            {"partId": "1", "mimeType": "image/png", "filename": "logo.png",
+             "headers": [{"name": "Content-ID", "value": " <logo@x> "}],
+             "body": {"size": 10, "attachmentId": "ANGjdJ_logo"}},
+            {"partId": "2", "mimeType": "image/png", "filename": "odd.png",
+             "headers": [{"name": "content-id", "value": "<a b\u{1b}>"}],
+             "body": {"size": 10, "attachmentId": "ANGjdJ_odd"}}
+        ]
+    });
+    let body = body_of(&gmail, payload).await.unwrap();
+    let ids: Vec<Option<&str>> = body
+        .attachments
+        .iter()
+        .map(|a| a.content_id.as_deref())
+        .collect();
+    assert_eq!(ids, [Some("logo@x"), None]);
+}

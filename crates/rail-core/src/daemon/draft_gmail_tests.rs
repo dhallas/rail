@@ -67,6 +67,7 @@ pub(super) fn seed_drafts(mock: &MockProvider) {
                     mime_type: "application/pdf".into(),
                     size: 1234,
                     plain_file: true,
+                    content_id: None,
                 }],
                 ..Body::default()
             },

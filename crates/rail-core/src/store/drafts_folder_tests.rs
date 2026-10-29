@@ -397,6 +397,7 @@ fn the_import_source_carries_threading_bcc_and_the_draft_flag() {
             mime_type: "application/pdf".into(),
             size: 10,
             plain_file: true,
+            content_id: None,
         }],
         ..Body::default()
     };

@@ -101,6 +101,7 @@ impl Part {
             mime_type: self.mime_type.into(),
             size: i64::try_from(self.bytes.len()).unwrap(),
             plain_file: true,
+            content_id: None,
         }
     }
 }

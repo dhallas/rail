@@ -17,6 +17,7 @@ use crate::config::model::is_format_char;
 use crate::provider::html::html_render;
 use crate::provider::limits::{MAX_ATTACHMENTS, MAX_FILENAME_CHARS};
 use crate::provider::links::{Rendered, plain_links};
+use crate::provider::types::content_id;
 use crate::provider::{AttachmentMeta, Body, ProviderError};
 
 /// The most body text (and HTML) Rail keeps for one message.
@@ -181,6 +182,11 @@ fn collect_attachments(part: &Part, attachments: &mut Vec<AttachmentMeta>, depth
                 mime_type: one_line_capped(&mime, MAX_MIME_CHARS),
                 size: part.body.size.max(0),
                 plain_file: true,
+                content_id: part
+                    .headers
+                    .iter()
+                    .find(|h| h.name.eq_ignore_ascii_case("content-id"))
+                    .and_then(|h| content_id(&h.value)),
             });
         }
         return;

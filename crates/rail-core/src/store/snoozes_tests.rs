@@ -134,7 +134,7 @@ fn migration_ten_adds_the_snooze_tables_to_a_version_nine_store() {
         .conn()
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 10);
+    assert_eq!(version, super::migrations::LATEST_VERSION);
     for table in ["snoozes", "snooze_messages"] {
         let found: bool = store
             .conn()

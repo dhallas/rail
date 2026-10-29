@@ -118,6 +118,7 @@ async fn an_attachment_removed_in_outlook_is_not_imported_from_the_cache() {
             mime_type: "text/plain".into(),
             size: 12,
             plain_file: true,
+            content_id: None,
         }],
     );
     remote_body(&c, body(false)).await;

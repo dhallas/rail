@@ -351,15 +351,16 @@ fn store_body(
     for a in &body.attachments {
         tx.execute(
             "INSERT INTO attachments (message_id, remote_part_id, filename, mime_type, size,
-                                      plain_file)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                                      plain_file, content_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 message,
                 a.part_id,
                 a.filename,
                 a.mime_type,
                 a.size,
-                a.plain_file
+                a.plain_file,
+                a.content_id
             ],
         )?;
     }

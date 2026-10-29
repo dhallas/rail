@@ -207,6 +207,26 @@ pub struct AttachmentMeta {
     /// attached messages and links stay where Outlook keeps them, and its inline pictures go
     /// when Rail writes the text body.
     pub plain_file: bool,
+    /// The part's Content-ID without its angle brackets: what a `cid:` address in the HTML
+    /// names. `None` when it has none, or one Rail does not keep (`content_id`).
+    pub content_id: Option<String>,
+}
+
+/// The longest Content-ID Rail keeps, in bytes.
+pub(crate) const MAX_CONTENT_ID_BYTES: usize = 255;
+
+/// A Content-ID header's value (`<logo@x>`, with or without the brackets) as Rail keeps it:
+/// printable ASCII without spaces, 1 to `MAX_CONTENT_ID_BYTES` bytes; anything else is `None`.
+pub(crate) fn content_id(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let id = trimmed
+        .strip_prefix('<')
+        .and_then(|rest| rest.strip_suffix('>'))
+        .unwrap_or(trimmed);
+    let kept = !id.is_empty()
+        && id.len() <= MAX_CONTENT_ID_BYTES
+        && id.bytes().all(|b| b.is_ascii_graphic());
+    kept.then(|| id.to_string())
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

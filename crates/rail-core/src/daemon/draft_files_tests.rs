@@ -193,6 +193,7 @@ async fn attachments_named_like_temp_files_and_at_the_name_limit_import() {
                 mime_type: "application/octet-stream".into(),
                 size: 1,
                 plain_file: true,
+                content_id: None,
             })
             .collect();
         for i in 0..names.len() {

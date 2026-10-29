@@ -47,6 +47,7 @@ fn part(part_id: &str, filename: &str, mime_type: &str, size: i64) -> Attachment
         mime_type: mime_type.into(),
         size,
         plain_file: true,
+        content_id: None,
     }
 }
 
@@ -111,4 +112,82 @@ fn part_id_round_trips_and_listed_attachments_reads_it() {
         store.listed_attachments(2, "m1").unwrap().is_empty(),
         "another account's message"
     );
+}
+
+/// An inline part's Content-ID is kept with it, and a part without one stores NULL.
+#[test]
+fn a_content_id_is_stored_with_its_part() {
+    let mut store = seeded();
+    store
+        .apply(
+            &Batch {
+                upserts: vec![envelope("m1", "t1", BASE_MS)],
+                ..Batch::new(1)
+            },
+            NOW,
+        )
+        .unwrap();
+    let logo = AttachmentMeta {
+        content_id: Some("logo@x".into()),
+        ..part("0.2", "logo.png", "image/png", 512)
+    };
+    let body = Body {
+        text: "hi".into(),
+        attachments: vec![part("0.1", "plan.pdf", "application/pdf", 2048), logo],
+        ..Body::default()
+    };
+    store
+        .apply(
+            &Batch {
+                bodies: vec![("m1".into(), body)],
+                ..Batch::new(1)
+            },
+            NOW,
+        )
+        .unwrap();
+    let mut stmt = store
+        .conn()
+        .prepare("SELECT remote_part_id, content_id FROM attachments ORDER BY id")
+        .unwrap();
+    let rows: Vec<(String, Option<String>)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        rows,
+        [
+            ("0.1".to_string(), None),
+            ("0.2".to_string(), Some("logo@x".to_string()))
+        ]
+    );
+}
+
+/// Migration 11 adds the column to a version-10 store; the parts already there have none.
+#[test]
+fn migration_eleven_adds_content_id_to_a_version_ten_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rail.db");
+    {
+        let store = Store::open_at_version(&path, 10).unwrap();
+        store
+            .conn()
+            .execute_batch(
+                "INSERT INTO accounts (name, kind, address) VALUES ('work', 'gmail', 'w@example.com');
+                 INSERT INTO threads (account_id, remote_id) VALUES (1, 't1');
+                 INSERT INTO messages (account_id, thread_id, remote_id) VALUES (1, 1, 'm1');
+                 INSERT INTO attachments (message_id, remote_part_id) VALUES (1, 'a1');",
+            )
+            .unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(
+        store.schema_version().unwrap(),
+        super::migrations::LATEST_VERSION
+    );
+    let id: Option<String> = store
+        .conn()
+        .query_row("SELECT content_id FROM attachments", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(id, None);
 }

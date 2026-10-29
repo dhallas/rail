@@ -3,8 +3,9 @@
 //! HTML through `provider::html`, text as it is, both cut at `MAX_BODY_BYTES`). With
 //! `hasAttachments`, the attachment list comes with it, inline ones included, as Gmail lists
 //! every named part; each says whether it is a plain file (`reconcile::plain_file`), the only
-//! kind a forward carries and an import fetches. Graph says `hasAttachments` is false when
-//! every attachment is inline, and then none is listed.
+//! kind a forward carries and an import fetches, and its Content-ID. Graph says
+//! `hasAttachments` is false when every attachment is inline: the list is then read only when
+//! the HTML names a `cid:` image.
 
 use super::reconcile::plain_file;
 use super::wire::{AttachmentWire, BodyWire, Page};
@@ -12,6 +13,7 @@ use super::{COST_REQUEST, GraphProvider, graph_id};
 use crate::provider::gmail::body::{Kind, render};
 use crate::provider::gmail::metadata::one_line_capped;
 use crate::provider::limits::{MAX_ATTACHMENTS, MAX_FILENAME_CHARS};
+use crate::provider::types::content_id;
 use crate::provider::{AttachmentMeta, Body, ProviderError};
 
 /// The preference that asks for the HTML body.
@@ -36,6 +38,7 @@ fn meta(wire: AttachmentWire) -> AttachmentMeta {
         mime_type: one_line_capped(&mime, MAX_MIME_CHARS),
         size: wire.size.unwrap_or(0).max(0),
         plain_file: plain_file(wire.odata_type.as_deref(), wire.is_inline),
+        content_id: wire.content_id.as_deref().and_then(content_id),
         part_id: wire.id,
     }
 }
@@ -54,16 +57,20 @@ impl GraphProvider {
         if wire.id.as_deref() != Some(id) {
             return Err(unreadable());
         }
-        let attachments = match wire.has_attachments {
-            Some(true) => self.attachment_list(id).await?,
-            _ => Vec::new(),
-        };
         let body = wire.body.unwrap_or_default();
         let kind = match body.content_type.as_deref() {
             Some(text) if text.eq_ignore_ascii_case("text") => Kind::Plain,
             _ => Kind::Html,
         };
         let content = body.content.unwrap_or_default();
+        // Graph says `hasAttachments` is false when every attachment is inline, so HTML that
+        // names a `cid:` image is listed anyway.
+        let names_inline = kind == Kind::Html && content.contains("cid:");
+        let attachments = if wire.has_attachments == Some(true) || names_inline {
+            self.attachment_list(id).await?
+        } else {
+            Vec::new()
+        };
         tokio::task::spawn_blocking(move || render(kind, content.as_bytes(), None, attachments))
             .await
             .map_err(|_| unreadable())?
@@ -71,7 +78,10 @@ impl GraphProvider {
 
     async fn attachment_list(&self, id: &str) -> Result<Vec<AttachmentMeta>, ProviderError> {
         let query = [
-            ("$select", "id,name,contentType,size,isInline".to_string()),
+            (
+                "$select",
+                "id,name,contentType,size,isInline,contentId".to_string(),
+            ),
             ("$top", MAX_ATTACHMENTS.to_string()),
         ];
         let path = format!("me/messages/{id}/attachments");
