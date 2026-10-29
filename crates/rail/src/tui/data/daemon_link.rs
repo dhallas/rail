@@ -473,6 +473,10 @@ pub struct FakeDaemon {
     /// Numbers the token directories the default `attachment.open` answer writes, so two
     /// opens never share one.
     pub next_token: std::sync::atomic::AtomicI64,
+    /// `attachment.image` answers by Content-ID; not found for any other.
+    pub image_answers: std::sync::Mutex<
+        std::collections::HashMap<String, Result<rail_core::ops::AttachmentImageResponse, OpError>>,
+    >,
     /// The fake's own saved searches, which a `put` or `remove` applies to when
     /// `saved_answer` is unset.
     pub saved: std::sync::Mutex<Vec<rail_core::config::SavedSearch>>,
@@ -545,6 +549,11 @@ pub enum FakeCall {
         account: String,
         message_id: String,
         part_id: String,
+    },
+    AttachmentImage {
+        account: String,
+        message_id: String,
+        content_id: String,
     },
     SavedSearchPut {
         name: String,

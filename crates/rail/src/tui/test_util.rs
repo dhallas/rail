@@ -498,6 +498,8 @@ pub fn mail_ctx(paths: &Paths, fake: Arc<FakeDaemon>) -> MailContext {
         show_clock: true,
         thread_order: ThreadOrder::Oldest,
         rich_html: true,
+        images: true,
+        picker: Some(ratatui_image::picker::Picker::halfblocks()),
         dim_read: rail_core::config::DimRead::Dot,
         hyperlinks: false,
         depth: ColorDepth::TrueColor,

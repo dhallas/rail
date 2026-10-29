@@ -3,6 +3,7 @@
 //! line highlighted, and (where the terminal supports them) the link markers as OSC 8
 //! hyperlinks.
 
+use std::collections::HashSet;
 use std::num::NonZeroU16;
 
 use ratatui::Frame;
@@ -11,6 +12,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use ratatui_image::sliced::{SignedPosition, SlicedImage};
 
 use super::{LineKind, Reader, ReaderLine, Tone};
 use crate::tui::screens::mail::visible_offset;
@@ -105,8 +107,43 @@ impl Reader {
             .map(|(index, line)| styled(line, theme, badge, focused && index == self.cursor))
             .collect();
         frame.render_widget(Paragraph::new(shown), area);
+        self.draw_pictures(frame, area, &lines, scroll);
         if hyperlinks {
             self.link_cells(frame.buffer_mut(), area, &lines[scroll.min(lines.len())..]);
+        }
+    }
+
+    /// Each picture with a row in view, once, over the rows its lines keep for it: from above
+    /// the area when its top has scrolled away, so only its visible slices are drawn.
+    fn draw_pictures(&self, frame: &mut Frame, area: Rect, lines: &[ReaderLine], scroll: usize) {
+        let mut drawn = HashSet::new();
+        let visible = lines
+            .iter()
+            .enumerate()
+            .skip(scroll)
+            .take(usize::from(area.height));
+        for (index, line) in visible {
+            let LineKind::Picture {
+                message,
+                picture,
+                row,
+                cols,
+                rows,
+            } = line.kind
+            else {
+                continue;
+            };
+            if !drawn.insert((message, picture)) {
+                continue;
+            }
+            let Some(encoded) = self.protocol(message, picture, cols, rows) else {
+                continue;
+            };
+            let top = i64::try_from(index - scroll).unwrap_or(i64::MAX) - i64::from(row);
+            let Ok(y) = i16::try_from(top) else {
+                continue;
+            };
+            frame.render_widget(SlicedImage::new(&encoded, SignedPosition { x: 0, y }), area);
         }
     }
 

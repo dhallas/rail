@@ -75,8 +75,11 @@ impl MailScreen {
                             account,
                             self.ctx.thread_order,
                         );
-                        self.reader =
-                            Some(reader.with_unread(unread).with_rich(self.ctx.rich_html));
+                        let reader = reader
+                            .with_unread(unread)
+                            .with_rich(self.ctx.rich_html)
+                            .with_images(self.picker());
+                        self.reader = Some(reader);
                         // A read landing under an open composer leaves it the keys.
                         if self.compose.is_none() {
                             self.focus = Focus::Reader;
@@ -603,6 +606,7 @@ impl MailScreen {
             Target::RemoveSearch { index, name } => self.remove_search_confirm(index, &name),
             Target::SearchCounts => self.toggle_search_counts(),
             Target::RichHtml => self.toggle_rich_html(),
+            Target::Images => self.toggle_images(),
             Target::Scope(scope) => {
                 let mut effects = self.close_reader();
                 effects.extend(self.set_scope(scope));

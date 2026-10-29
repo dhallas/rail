@@ -25,7 +25,7 @@ const QUOTED: Style = Style {
 
 fn built(body: &RichBody, unfolded: &HashSet<(usize, usize)>, width: usize) -> Vec<ReaderLine> {
     let mut out = Vec::new();
-    lines(&mut out, 0, body, unfolded, width);
+    lines(&mut out, 0, body, unfolded, width, None);
     out
 }
 
@@ -101,6 +101,7 @@ fn outside_text_is_escaped() {
             style: STRONG,
         }],
         cut: false,
+        pictures: Vec::new(),
     };
     let out = built(&body, &HashSet::new(), 80);
     assert_eq!(

@@ -12,7 +12,8 @@ use rail_core::provider::html::Style;
 use rail_core::store::view::{BodyState, MessageView, ThreadDetail};
 
 use super::ReaderAccount;
-use super::rich::{self, RichBody};
+use super::pictures::Pictures;
+use super::rich::{self, Placing, RichBody};
 use crate::tui::clock::Clock;
 use crate::tui::screens::mail::Glyphs;
 use crate::tui::text::{Block, blocks, escape, expand_tabs, fit, fold_label, wrap};
@@ -51,6 +52,15 @@ pub enum LineKind {
     Status {
         message: usize,
     },
+    /// Row `row` of picture `picture` of a rich body, `cols` by `rows` cells; the view draws
+    /// the picture over these rows.
+    Picture {
+        message: usize,
+        picture: usize,
+        row: u16,
+        cols: u16,
+        rows: u16,
+    },
     /// A rule between the title block, the newest message and the cards.
     Rule,
     Gap,
@@ -66,7 +76,8 @@ impl LineKind {
             | Self::Body { message }
             | Self::Fold { message, .. }
             | Self::Quote { message, .. }
-            | Self::Status { message } => Some(message),
+            | Self::Status { message }
+            | Self::Picture { message, .. } => Some(message),
             Self::Note | Self::Rule | Self::Gap => None,
         }
     }
@@ -165,6 +176,9 @@ pub(super) struct State<'a> {
     pub read_error: Option<&'a str>,
     /// In rich mode, the HTML bodies read so far by message id; `None` in plain mode.
     pub rich: Option<&'a HashMap<i64, Rc<RichBody>>>,
+    /// With images on, the pictures read so far by (message id, Content-ID) and the terminal
+    /// cell's size in pixels; `None` with images off.
+    pub pictures: Option<(&'a Pictures, (u16, u16))>,
 }
 
 fn line(kind: LineKind, text: String, tone: Tone) -> ReaderLine {
@@ -280,7 +294,12 @@ fn body(out: &mut Vec<ReaderLine>, index: usize, m: &MessageView, state: &State<
         BodyState::Text { text, cut } => {
             let cut = match state.rich.and_then(|bodies| bodies.get(&m.id)) {
                 Some(body) => {
-                    rich::lines(out, index, body, state.unfolded, width);
+                    let placing = state.pictures.map(|(states, font)| Placing {
+                        states,
+                        font,
+                        message_id: m.id,
+                    });
+                    rich::lines(out, index, body, state.unfolded, width, placing.as_ref());
                     body.cut
                 }
                 None => {

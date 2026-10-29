@@ -6,6 +6,7 @@ mod attachments_link;
 #[cfg(test)]
 mod bulk_tests;
 mod daemon_link;
+mod image_link;
 mod rich_read;
 mod saved_link;
 #[cfg(test)]
@@ -98,6 +99,12 @@ pub enum MailEvent {
     Html {
         message_id: i64,
         result: Result<Option<HtmlBody>, ReadError>,
+    },
+    /// An inline picture fetched and decoded; `None` when it could not be had.
+    Picture {
+        message_id: i64,
+        content_id: String,
+        image: Option<image::DynamicImage>,
     },
     /// A message's HTML part scanned for rich mode; `None` when it has none.
     RichHtml {
@@ -285,6 +292,10 @@ pub enum MailEvent {
     RichHtmlSaved {
         result: Result<(), String>,
     },
+    /// `config.toml` was written for `:images`.
+    ImagesSaved {
+        result: Result<(), String>,
+    },
 }
 
 /// Names and numbers only: a `MailEvent` carries mail, which must never reach a log.
@@ -314,6 +325,13 @@ impl fmt::Debug for MailEvent {
             Self::Html { message_id, .. } => f
                 .debug_struct("Html")
                 .field("message_id", message_id)
+                .finish(),
+            Self::Picture {
+                message_id, image, ..
+            } => f
+                .debug_struct("Picture")
+                .field("message_id", message_id)
+                .field("ok", &image.is_some())
                 .finish(),
             Self::RichHtml { message_id, .. } => f
                 .debug_struct("RichHtml")
@@ -512,6 +530,10 @@ impl fmt::Debug for MailEvent {
                 .finish(),
             Self::RichHtmlSaved { result } => f
                 .debug_struct("RichHtmlSaved")
+                .field("ok", &result.is_ok())
+                .finish(),
+            Self::ImagesSaved { result } => f
+                .debug_struct("ImagesSaved")
                 .field("ok", &result.is_ok())
                 .finish(),
         }

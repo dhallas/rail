@@ -29,6 +29,7 @@ use crate::tui::theme::Theme;
 mod cards;
 mod links;
 mod open;
+mod pictures;
 mod rich;
 mod state;
 

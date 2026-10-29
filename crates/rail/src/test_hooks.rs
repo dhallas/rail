@@ -55,6 +55,12 @@ pub fn mail_panic() -> bool {
     var("RAIL_TEST_MAIL_PANIC").is_some()
 }
 
+/// Do not ask the terminal how it draws pictures: a pseudo-terminal in a test answers
+/// nothing, and the question would wait out its timeout reading stdin.
+pub fn no_image_query() -> bool {
+    var("RAIL_TEST_NO_IMAGE_QUERY").is_some()
+}
+
 /// How long `run_app` waits after the terminal is restored, in seconds, so a binary test can
 /// signal Rail while it is past its run loop (as during the wizard's settle).
 pub fn linger_after_loop() -> Option<std::time::Duration> {

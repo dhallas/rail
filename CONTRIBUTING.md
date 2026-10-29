@@ -153,6 +153,8 @@ the browser (`RAIL_TEST_OPENER`), the token endpoint (`RAIL_TEST_TOKEN_URL`), th
 (`RAIL_TEST_GMAIL_URL`), shorten the daemon's idle timeout (`RAIL_TEST_IDLE_SECS`,
 `RAIL_TEST_IDLE_WITH_ACCOUNTS`) and `rail sync`'s stall watch (`RAIL_TEST_SYNC_STALL_SECS`), make
 the mail screen panic on its first key (`RAIL_TEST_MAIL_PANIC`, for the terminal-restore test),
+skip asking the terminal how it draws pictures (`RAIL_TEST_NO_IMAGE_QUERY`, which a
+pseudo-terminal never answers),
 and record the `systemctl`/`launchctl` commands `rail daemon install` would run instead of running them
 (`RAIL_TEST_SERVICE_LOG`). Release builds ignore them all. Every binary test also sets
 `XDG_CONFIG_HOME` (and, on macOS, `HOME`) inside its temporary directory. One unit test checks the

@@ -27,6 +27,8 @@ fn rail_env<'a>(cmd: &'a mut Command, dir: &tempfile::TempDir) -> &'a mut Comman
         .env("RAIL_TEST_GRAPH_URL", "http://127.0.0.1:9/v1.0/")
         .env("RAIL_TEST_TOKEN_URL", "http://127.0.0.1:9/token")
         .env("RAIL_TEST_IDLE_WITH_ACCOUNTS", "1")
+        // A pseudo-terminal answers no picture query, which would wait out its timeout.
+        .env("RAIL_TEST_NO_IMAGE_QUERY", "1")
 }
 
 /// Runs `rail daemon stop` for `dir` when dropped, so a test that starts a daemon ends it,

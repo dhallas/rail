@@ -87,6 +87,9 @@ pub struct General {
     /// `general.rich_html`: the reader draws an HTML body's bold, italic, quoted and linked
     /// text in their styles. `false` shows the plain text. `:rich-html` toggles it.
     pub rich_html: bool,
+    /// `general.images`: in rich mode the reader draws an HTML body's inline (`cid:`)
+    /// pictures. `false` leaves them out. `:images` toggles it.
+    pub images: bool,
 }
 
 impl Default for General {
@@ -111,6 +114,7 @@ impl Default for General {
             attachment_dir: None,
             saved_search_counts: true,
             rich_html: true,
+            images: true,
         }
     }
 }

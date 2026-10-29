@@ -86,6 +86,8 @@ fn context(
         show_clock: config.general.clock,
         thread_order: config.general.thread_order,
         rich_html: config.general.rich_html,
+        images: config.general.images,
+        picker: picker(),
         dim_read: config.general.dim_read,
         hyperlinks: hyperlinks_supported(|name| std::env::var(name).ok()),
         depth,
@@ -144,6 +146,17 @@ fn hint_for(error: &ThemeError) -> &'static str {
             "hint: accent takes a palette slot 0 to 15, a colour name such as \"blue\", or \"#rrggbb\"; :accent inside Rail picks one"
         }
     }
+}
+
+/// How this terminal draws pictures (kitty, iTerm2 or sixel, and its cell size), asked once
+/// before the screen starts reading keys, since the answer comes on stdin. A terminal that
+/// does not answer gets half blocks.
+fn picker() -> Option<ratatui_image::picker::Picker> {
+    if test_hooks::no_image_query() {
+        return None;
+    }
+    let picker = ratatui_image::picker::Picker::from_query_stdio();
+    Some(picker.unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks()))
 }
 
 #[cfg(test)]

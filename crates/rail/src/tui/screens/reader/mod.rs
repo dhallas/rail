@@ -11,6 +11,9 @@ mod keys_tests;
 mod lines;
 #[cfg(test)]
 mod lines_tests;
+mod pictures;
+#[cfg(test)]
+mod pictures_tests;
 mod rich;
 #[cfg(test)]
 mod rich_tests;
@@ -30,6 +33,7 @@ use rail_core::store::view::{BodyState, MessageView, ThreadDetail};
 use ratatui::style::Color;
 
 pub use lines::{LineKind, ReaderLine, Tone};
+pub use pictures::decode as decode_picture;
 pub use rich::{RichBody, from_html};
 
 use crate::tui::clock::Clock;
@@ -119,6 +123,12 @@ pub struct Reader {
     /// Message ids whose HTML was asked for: never asked twice while the reader is open. One
     /// with no HTML, or whose read failed, stays plain.
     rich_asked: HashSet<i64>,
+    /// With images on (`images`, `:images`), what draws them; `None` with images off.
+    picker: Option<ratatui_image::picker::Picker>,
+    /// The pictures asked for or read, by (message id, Content-ID).
+    pictures: pictures::Pictures,
+    /// Each drawn picture encoded for the terminal, by (message id, Content-ID, columns, rows).
+    protocols: RefCell<HashMap<pictures::ProtocolKey, Rc<ratatui_image::sliced::SlicedProtocol>>>,
     /// The last re-read failed: the subject line shows this (escaped) until a read succeeds.
     read_error: Option<String>,
     cursor: usize,
@@ -171,6 +181,9 @@ impl Reader {
             rich: false,
             rich_bodies: HashMap::new(),
             rich_asked: HashSet::new(),
+            picker: None,
+            pictures: HashMap::new(),
+            protocols: RefCell::new(HashMap::new()),
             read_error: None,
             cursor: 0,
             scroll: 0,
@@ -493,6 +506,7 @@ impl Reader {
             order: self.order,
             read_error: self.read_error.as_deref(),
             rich: self.rich.then_some(&self.rich_bodies),
+            pictures: self.placing(),
         };
         let built = Rc::new(cards::build(
             &self.detail,

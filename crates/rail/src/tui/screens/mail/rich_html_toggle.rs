@@ -38,9 +38,13 @@ impl MailScreen {
         };
         let ids = reader.rich_wanted();
         reader.mark_rich_asked(&ids);
-        ids.into_iter()
+        let mut effects: Vec<Effect> = ids
+            .into_iter()
             .map(|id| self.ctx.store.rich_html(id))
-            .collect()
+            .collect();
+        // Bodies read before may have pictures a message just opened shows.
+        effects.extend(self.load_pictures());
+        effects
     }
 
     /// A message's HTML scanned: the open reader's own messages only (it may have closed or
@@ -61,8 +65,9 @@ impl MailScreen {
             Ok(body) => reader.rich_read(message_id, body),
             Err(error) => {
                 self.side_read_failed(error, "message");
+                return Vec::new();
             }
         }
-        Vec::new()
+        self.load_pictures()
     }
 }

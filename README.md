@@ -446,8 +446,11 @@ hides, for the session, the headers of every open message: `From:`, `To:` and `C
 
 HTML mail is shown as Rail's own rendering of it, the same text Rail stores and searches, with
 its bold and headings bold, its italics italic, its quotes dimmed and its links underlined
-(`rich_html = false` under `[general]` or `:rich-html` shows that text without the styles), and
-with each link as a numbered marker such as `[1]`; in terminals that support hyperlinks (iTerm2, WezTerm, kitty, Ghostty, VS Code, Windows
+(`rich_html = false` under `[general]` or `:rich-html` shows that text without the styles), with
+its inline pictures (the ones the message itself carries, at the size it asks for; `[image: …]`
+until they arrive, and pictures of a few pixels, such as tracking pixels, left out; remote pictures
+are never fetched; `images = false` or `:images` leaves them all out), and with each link as a
+numbered marker such as `[1]`; in terminals that support hyperlinks (iTerm2, WezTerm, kitty, Ghostty, VS Code, Windows
 Terminal, Hyper, foot, Alacritty, GNOME Terminal and other VTE terminals; not inside tmux or
 screen) the marker is clickable; while a box such as help or a confirmation is open the markers
 are plain text. `g x` opens a link: the marker on the cursor line, or the number you type when the
@@ -586,6 +589,11 @@ session.
 (`HTML mail: with its styles`), in the open reader and every one opened after, and saves the
 choice (`rich_html = false` under `[general]`; styles on removes the key); a save that fails says
 `Could not save the HTML mail setting: …` and keeps the choice for this session.
+
+`images` hides the pictures in HTML mail (`images: off`), or shows them again (`images: on`), in the
+open reader and every one opened after, and saves the choice (`images = false` under `[general]`;
+showing them removes the key); a save that fails says `Could not save the images setting: …` and
+keeps the choice for this session.
 
 `?` shows the keys of the view you are in, marking with `*` the ones set in
 `config.toml`; `?` again (or whatever `global.help` is bound to), `Esc` or `q` closes it. Help and
@@ -1376,6 +1384,7 @@ running syncs carry on unchanged.
 | `attachment_dir` | unset | Where `s`, `S` and `w` save attachments. Unset is your download directory (the `XDG_DOWNLOAD_DIR` entry of `~/.config/user-dirs.dirs` on Linux, else `~/Downloads`). `~` is expanded, and refused when there is no `$HOME` to expand it to; a relative path is refused, as is one inside Rail's own attachment cache (`attachments` in the cache directory, reached directly, through a symlink or through `..`), whose files Rail sweeps a day after it writes them. |
 | `saved_search_counts` | `true` | Unread counts beside each saved search in the sidebar. `false` leaves them out and skips the count queries, the one thing saved searches cost on a large mailbox. `:search-counts` toggles it and saves it. |
 | `rich_html` | `true` | The reader draws HTML mail's bold, italic, quoted and linked text in those styles. `false` shows the same text plain. `:rich-html` toggles it and saves it. |
+| `images` | `true` | With `rich_html`, the reader draws the pictures an HTML message carries inline, through the terminal's image protocol (kitty, iTerm2 or sixel) or as coloured half blocks elsewhere. `false` leaves them out. `:images` toggles it and saves it. |
 
 ### `[[saved_searches]]`
 
