@@ -74,7 +74,7 @@ impl GraphProvider {
         // Graph says `hasAttachments` is false when every attachment is inline, so HTML that
         // names a `cid:` image is listed anyway.
         let wanted =
-            wire.has_attachments == Some(true) || kind == Kind::Html && names_cid(&content);
+            wire.has_attachments == Some(true) || (kind == Kind::Html && names_cid(&content));
         let listed = if wanted {
             self.listed_if_allowed(id).await?
         } else {

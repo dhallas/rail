@@ -33,7 +33,8 @@ async fn refuse_the_listing(g: &Graph) {
 }
 
 /// m1 loaded with a body and one stored attachment, then marked unfetched as schema v8 does;
-/// the second pass fetches its body again from what `serve` mounts.
+/// the second pass fetches its body again from what `serve` mounts. The first body's mock
+/// says `.expect(1)`; `reset` drops it unchecked, so `serve`'s own mocks answer the second.
 async fn fetched_again(serve: impl AsyncFnOnce(&Graph)) -> Harness {
     let g = Graph::start().await;
     inbox(&g).await;
