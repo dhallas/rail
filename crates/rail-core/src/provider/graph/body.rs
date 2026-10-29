@@ -5,8 +5,9 @@
 //! every named part; each says whether it is a plain file (`reconcile::plain_file`), the only
 //! kind a forward carries and an import fetches, and its Content-ID. Graph says
 //! `hasAttachments` is false when every attachment is inline: the list is then read only when
-//! the HTML names a `cid:` image. A list Graph refuses leaves the body without attachments
-//! rather than unreadable.
+//! the HTML names a `cid:` image (in any case). Only that list, refused, leaves the body
+//! without attachments rather than unreadable: a refused list Graph says has attachments fails
+//! the fetch, since a body stored without them is never fetched again.
 
 use super::reconcile::plain_file;
 use super::wire::{AttachmentWire, BodyWire, Page};
@@ -44,6 +45,13 @@ fn meta(wire: AttachmentWire) -> AttachmentMeta {
     }
 }
 
+/// Whether HTML names a `cid:` image, in any case (`CID:` is the same scheme).
+fn names_cid(html: &str) -> bool {
+    html.as_bytes()
+        .windows(4)
+        .any(|w| w.eq_ignore_ascii_case(b"cid:"))
+}
+
 impl GraphProvider {
     pub(crate) async fn read_body(&self, id: &str) -> Result<Body, ProviderError> {
         if !graph_id(id) {
@@ -66,23 +74,28 @@ impl GraphProvider {
         let content = body.content.unwrap_or_default();
         // Graph says `hasAttachments` is false when every attachment is inline, so HTML that
         // names a `cid:` image is listed anyway.
-        let names_inline = kind == Kind::Html && content.contains("cid:");
-        let attachments = if wire.has_attachments == Some(true) || names_inline {
-            match self.attachment_list(id).await {
-                // The body is readable without its list: a refused listing must not cost it.
-                // Anything a retry may fix (or a login) still fails the fetch, to be tried again.
-                Err(ProviderError::Permanent { .. }) => {
-                    tracing::warn!("the attachment list was refused; the body is kept without it");
-                    Vec::new()
-                }
-                listed => listed?,
-            }
+        let attachments = if wire.has_attachments == Some(true) {
+            self.attachment_list(id).await?
+        } else if kind == Kind::Html && names_cid(&content) {
+            self.inline_list(id).await?
         } else {
             Vec::new()
         };
         tokio::task::spawn_blocking(move || render(kind, content.as_bytes(), None, attachments))
             .await
             .map_err(|_| unreadable())?
+    }
+
+    /// The list asked for on a `cid:` alone. The body is readable without it: a refused
+    /// listing must not cost it. Anything a retry may fix (or a login) still fails the fetch.
+    async fn inline_list(&self, id: &str) -> Result<Vec<AttachmentMeta>, ProviderError> {
+        match self.attachment_list(id).await {
+            Err(error @ ProviderError::Permanent { .. }) => {
+                tracing::warn!(class = ?error.class(), detail = ?error.detail(), "the attachment list was refused; the body is kept without it");
+                Ok(Vec::new())
+            }
+            listed => listed,
+        }
     }
 
     async fn attachment_list(&self, id: &str) -> Result<Vec<AttachmentMeta>, ProviderError> {
