@@ -264,8 +264,8 @@ fn the_image_operation_is_registered_retry_safe_and_prints_nothing() {
         mime_type: "image/png".into(),
     };
     let printed = format!("{request:?} {response:?}");
-    for secret in ["work", "m1", "logo", "cache", "png"] {
-        assert!(!printed.contains(secret), "{secret} in {printed}");
+    for mail in ["work", "m1", "logo", "cache", "png"] {
+        assert!(!printed.contains(mail), "{mail} in {printed}");
     }
     assert_eq!(super::image_extension(" IMAGE/JPEG "), Some("jpg"));
     assert_eq!(super::image_extension("image/svg+xml"), None);
