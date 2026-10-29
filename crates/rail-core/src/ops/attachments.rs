@@ -119,7 +119,7 @@ fn checked_part_id(value: &str) -> Result<(), OpError> {
 
 /// The same rule with at least one byte: a message id says which message a part belongs to,
 /// and neither provider gives an empty one.
-fn checked_message_id(value: &str) -> Result<(), OpError> {
+pub(super) fn checked_message_id(value: &str) -> Result<(), OpError> {
     checked_id(value, "message_id", 1)
 }
 

@@ -33,6 +33,7 @@ crates/rail-core/        Library: paths, config, store, auth, onboarding, operat
     ops/drafts.rs        The draft operations' types and the limits on a message
     ops/snooze.rs        `snooze.set`, `snooze.clear` and the `snooze.woke` notice, and a snooze's time limits
     ops/attachments.rs   `attachment.save` and `attachment.open`: their types, the id rule both check, and the types Rail hands to the system opener
+    ops/attachment_image.rs  `attachment.image`: its types, the image types the reader draws, the size cap and how long a cached picture lives
     ops/saved.rs         `saved_search.put` and `saved_search.remove`: their types, and why a saved query keeps `Debug` off all of them
   src/daemon/            JSON-RPC wire format, client and connector, the socket server and its handlers
     daemon/handlers/drafts.rs  The `draft.save`, `draft.send` and `draft.discard` handlers
@@ -40,6 +41,7 @@ crates/rail-core/        Library: paths, config, store, auth, onboarding, operat
     daemon/handlers/draft_files.rs  The private files of an imported draft: fetch, removal, the start-up sweep
     daemon/handlers/snooze.rs  The `snooze.set` and `snooze.clear` handlers
     daemon/handlers/attachments.rs  The `attachment.save` and `attachment.open` handlers: the visible name a save writes under, the private copy an open hands to the opener, and the sweep of stale copies
+    daemon/handlers/attachment_image.rs  The `attachment.image` handler: the inline picture a `cid:` names, refused or fetched, checked and cached under a hashed name, and the week-old sweep
     daemon/handlers/saved.rs  The `saved_search.put` and `saved_search.remove` handlers: every refusal decided before the edit and under the config lock, so a clashing name and an unknown one are told apart
   src/accounts/          The add, login and remove pipeline the daemon runs
   src/guide/             Google and Microsoft setup steps as versioned data

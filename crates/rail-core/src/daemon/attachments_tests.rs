@@ -133,7 +133,7 @@ pub(super) fn attachment_calls(h: &DaemonHarness) -> usize {
 
 /// The retry policy each part fetch ran under, in the order the fetches were made. The mock
 /// records the override in force per call, so `None` is the sync's own backoff.
-fn fetch_policies(h: &DaemonHarness) -> Vec<Option<RetryPolicy>> {
+pub(super) fn fetch_policies(h: &DaemonHarness) -> Vec<Option<RetryPolicy>> {
     h.mock.with(|m| {
         m.policies
             .iter()
@@ -161,7 +161,7 @@ pub(super) fn nothing_written(dir: &Path) {
 }
 
 /// Set `path`'s modification time `seconds` into the past.
-fn age(path: &Path, seconds: u64) {
+pub(super) fn age(path: &Path, seconds: u64) {
     let when = SystemTime::now() - Duration::from_secs(seconds);
     std::fs::File::options()
         .write(true)

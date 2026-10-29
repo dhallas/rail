@@ -5,6 +5,7 @@
 pub mod accounts;
 pub mod actions;
 pub mod attachment_content;
+pub mod attachment_image;
 pub mod attachments;
 pub mod body;
 pub mod confirm;
@@ -45,6 +46,10 @@ pub use actions::{
     OutboxDepth, OutboxId, RowToken, UNDO_GRACE, checked_token, client_token,
 };
 pub use attachment_content::{Signature, content_matches};
+pub use attachment_image::{
+    AttachmentImageRequest, AttachmentImageResponse, IMAGE_STALE_AFTER, IMAGE_TYPES,
+    MAX_IMAGE_BYTES, image_extension,
+};
 pub use attachments::{
     AttachmentOpenRequest, AttachmentOpenResponse, AttachmentOutcome, AttachmentResult,
     AttachmentSaveRequest, AttachmentSaveResponse, CONTENT_MISMATCH, MAX_DIR_BYTES,
