@@ -6,17 +6,25 @@ use std::rc::Rc;
 
 use image::{DynamicImage, RgbaImage};
 
+use rail_core::config::ThreadOrder;
+use ratatui_image::picker::Picker;
+
 use super::lines::{LineKind, ReaderLine};
-use super::pictures::{MAX_PICTURE_ROWS, Picture, content_id, decode, fit};
+use super::pictures::{
+    DecodedPicture, MAX_KEPT_PIXELS, MAX_PICTURE_ROWS, MAX_PICTURES_IN_FLIGHT,
+    MAX_PICTURES_PER_READER, Picture, content_id, decode, fit,
+};
 use super::rich::{Placing, from_html, lines};
+use super::test_threads::{four, reader_of};
 
 /// Cells of 8 by 16 pixels, as many terminals have.
 const FONT: (u16, u16) = (8, 16);
 
 fn picture(width: u32, height: u32) -> Picture {
-    Picture::Ready(Rc::new(DynamicImage::ImageRgba8(RgbaImage::new(
-        width, height,
-    ))))
+    Picture::Ready(Rc::new(DecodedPicture {
+        image: DynamicImage::ImageRgba8(RgbaImage::new(width, height)),
+        natural: (width, height),
+    }))
 }
 
 fn built(html: &str, states: Option<&HashMap<(i64, String), Picture>>) -> Vec<ReaderLine> {
@@ -68,8 +76,9 @@ fn decoding_reads_a_real_picture_and_refuses_one_past_the_limits() {
     let dir = tempfile::tempdir().unwrap();
     let small = dir.path().join("small.png");
     RgbaImage::new(3, 2).save(&small).unwrap();
-    let image = decode(&small).unwrap();
-    assert_eq!((image.width(), image.height()), (3, 2));
+    let decoded = decode(&small).unwrap();
+    assert_eq!((decoded.image.width(), decoded.image.height()), (3, 2));
+    assert_eq!(decoded.natural, (3, 2));
 
     let huge = dir.path().join("huge.png");
     image::GrayImage::new(9000, 1).save(&huge).unwrap();
@@ -146,5 +155,66 @@ fn pictures_do_not_move_the_folds() {
                 block: 0
             }
         );
+    }
+}
+
+#[test]
+fn a_large_picture_is_kept_shrunk_with_its_own_size_remembered() {
+    let dir = tempfile::tempdir().unwrap();
+    let large = dir.path().join("large.png");
+    image::GrayImage::new(2400, 1200).save(&large).unwrap();
+    let decoded = decode(&large).unwrap();
+    assert_eq!(decoded.natural, (2400, 1200), "sized as the mail's own");
+    let (w, h) = (decoded.image.width(), decoded.image.height());
+    assert!(u64::from(w) * u64::from(h) <= MAX_KEPT_PIXELS, "{w}x{h}");
+    assert_eq!(w, h * 2, "its shape kept");
+}
+
+/// A reader in rich mode with images on whose newest message carries `n` pictures.
+fn reader_with_pictures(n: usize) -> super::Reader {
+    let html: String = (0..n)
+        .map(|i| format!(r#"<p>{i}</p><img src="cid:p{i}@x" width="160" height="64">"#))
+        .collect();
+    let mut reader = reader_of(four(0), ThreadOrder::Oldest)
+        .with_rich(true)
+        .with_images(Some(Picker::halfblocks()));
+    reader.rich_read(4, Some(from_html(&html)));
+    reader
+}
+
+#[test]
+fn a_reader_asks_for_a_few_pictures_at_a_time_and_no_more_than_its_cap() {
+    let mut reader = reader_with_pictures(MAX_PICTURES_PER_READER + 8);
+    let mut asked = 0;
+    loop {
+        let wanted = reader.pictures_wanted();
+        assert!(wanted.len() <= MAX_PICTURES_IN_FLIGHT, "{}", wanted.len());
+        if wanted.is_empty() {
+            break;
+        }
+        reader.mark_pictures_asked(&wanted);
+        assert!(
+            reader.pictures_wanted().is_empty(),
+            "none more while they load"
+        );
+        asked += wanted.len();
+        for (id, _, content_id) in wanted {
+            reader.picture_read(id, content_id, None);
+        }
+    }
+    assert_eq!(asked, MAX_PICTURES_PER_READER);
+}
+
+#[test]
+fn a_picture_keeps_one_encoding_whatever_sizes_it_is_drawn_at() {
+    let mut reader = reader_with_pictures(1);
+    let decoded = DecodedPicture {
+        image: DynamicImage::ImageRgba8(RgbaImage::new(160, 64)),
+        natural: (160, 64),
+    };
+    reader.picture_read(4, "p0@x".into(), Some(decoded));
+    for (cols, rows) in [(20, 4), (10, 2), (40, 8), (20, 4)] {
+        assert!(reader.protocol(3, 0, cols, rows).is_some());
+        assert_eq!(reader.protocols.borrow().len(), 1);
     }
 }

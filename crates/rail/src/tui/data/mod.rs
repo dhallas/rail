@@ -104,7 +104,7 @@ pub enum MailEvent {
     Picture {
         message_id: i64,
         content_id: String,
-        image: Option<image::DynamicImage>,
+        image: Option<crate::tui::screens::reader::DecodedPicture>,
     },
     /// A message's HTML part scanned for rich mode; `None` when it has none.
     RichHtml {

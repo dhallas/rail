@@ -14,6 +14,7 @@ use super::{Fixture, fixture, keys, open_toms_card, press, store_bodies_on_fetch
 use crate::tui::data::FakeCall;
 use crate::tui::screen::Screen;
 use crate::tui::screens::reader::LineKind;
+use crate::tui::screens::reader::pictures::MAX_PICTURES_PER_READER;
 use crate::tui::theme::Theme;
 
 /// m1 shows a 160 by 64 picture under its first paragraph, whose bytes the fake daemon has.
@@ -125,4 +126,25 @@ async fn colon_images_hides_and_shows_the_pictures_and_saves_the_choice() {
     assert_eq!(image_calls(&f).len(), 1);
     let text = std::fs::read_to_string(f.paths.config_file()).unwrap();
     assert!(!text.contains("images"), "{text}");
+}
+
+#[tokio::test]
+async fn a_mail_with_many_pictures_has_only_the_readers_cap_asked_for() {
+    let (mut f, _dir) = with_a_picture().await;
+    let many = MAX_PICTURES_PER_READER + 8;
+    let html: String = (0..many)
+        .map(|i| format!(r#"<p>{i}</p><img src="cid:p{i}@x" width="160" height="64">"#))
+        .collect();
+    Store::open(&f.paths.db_file())
+        .unwrap()
+        .conn()
+        .execute(
+            "UPDATE messages SET body_html = ?1 WHERE remote_id = 'm1'",
+            [html],
+        )
+        .unwrap();
+    press(&mut f, KeyCode::Enter).await;
+    open_toms_card(&mut f).await;
+    // Each answer lets the next one be asked for, until the cap.
+    assert_eq!(image_calls(&f).len(), MAX_PICTURES_PER_READER);
 }

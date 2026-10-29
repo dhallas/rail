@@ -4,6 +4,8 @@
 //! `CSS_PX_PER_COL` CSS pixels to a column, rows from the terminal cell's shape, shrunk to the
 //! pane and `MAX_PICTURE_ROWS`. A picture of `MAX_HIDDEN_PX` or less on a side is a tracking
 //! pixel or a spacer and takes no room. Only `cid:` pictures: remote ones wait for stage 3.
+//! A reader asks for at most `MAX_PICTURES_PER_READER`, `MAX_PICTURES_IN_FLIGHT` at a time,
+//! and keeps each shrunk to `MAX_KEPT_PIXELS`, so one mail cannot fill memory.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -29,6 +31,13 @@ const MAX_HIDDEN_PX: u32 = 4;
 const MAX_DECODED_SIDE: u32 = 8192;
 /// The most memory one decode may take.
 const MAX_DECODE_ALLOC: u64 = 64 * 1024 * 1024;
+/// The most pixels a decoded picture keeps (4 MiB as RGBA): `MAX_PICTURE_ROWS` of even
+/// 32-pixel cells is under a thousand pixels, so more than the reader ever draws.
+pub const MAX_KEPT_PIXELS: u64 = 1024 * 1024;
+/// The most pictures one open reader asks for; the rest stay their placeholders.
+pub const MAX_PICTURES_PER_READER: usize = 32;
+/// The most pictures one reader has being fetched and decoded at once.
+pub const MAX_PICTURES_IN_FLIGHT: usize = 4;
 /// The longest Content-ID, as the store keeps it.
 const MAX_CONTENT_ID_BYTES: usize = 255;
 
@@ -43,11 +52,18 @@ pub struct Inline {
     pub height: Option<u32>,
 }
 
+/// A picture decoded and shrunk to `MAX_KEPT_PIXELS`; `natural` is its own size, which the
+/// sizing goes by.
+pub struct DecodedPicture {
+    pub image: DynamicImage,
+    pub natural: (u32, u32),
+}
+
 /// Where a picture is: asked for, drawn, or not to be had (the placeholder stays).
 #[derive(Clone)]
 pub enum Picture {
     Loading,
-    Ready(Rc<DynamicImage>),
+    Ready(Rc<DecodedPicture>),
     Failed,
 }
 
@@ -103,9 +119,10 @@ pub fn content_id(src: &str) -> Option<String> {
     kept.then(|| String::from_utf8_lossy(&out).into_owned())
 }
 
-/// The picture at `path` decoded, within `MAX_DECODED_SIDE` and `MAX_DECODE_ALLOC`. An
-/// animated picture gives its first frame. The error is the decoder's, never the path.
-pub fn decode(path: &Path) -> Result<DynamicImage, String> {
+/// The picture at `path` decoded, within `MAX_DECODED_SIDE` and `MAX_DECODE_ALLOC`, and
+/// shrunk to `MAX_KEPT_PIXELS`. An animated picture gives its first frame. The error is the
+/// decoder's, never the path.
+pub fn decode(path: &Path) -> Result<DecodedPicture, String> {
     let mut limits = Limits::default();
     limits.max_image_width = Some(MAX_DECODED_SIDE);
     limits.max_image_height = Some(MAX_DECODED_SIDE);
@@ -114,7 +131,27 @@ pub fn decode(path: &Path) -> Result<DynamicImage, String> {
         .and_then(ImageReader::with_guessed_format)
         .map_err(|error| error.kind().to_string())?;
     reader.limits(limits);
-    reader.decode().map_err(|error| error.to_string())
+    let image = reader.decode().map_err(|error| error.to_string())?;
+    let natural = (image.width(), image.height());
+    Ok(DecodedPicture {
+        image: shrunk(image),
+        natural,
+    })
+}
+
+/// `image` within `MAX_KEPT_PIXELS`, its shape kept.
+fn shrunk(image: DynamicImage) -> DynamicImage {
+    let pixels = u64::from(image.width()) * u64::from(image.height());
+    if pixels <= MAX_KEPT_PIXELS {
+        return image;
+    }
+    let scale = (MAX_KEPT_PIXELS as f64 / pixels as f64).sqrt();
+    let side = |px: u32| ((f64::from(px) * scale).floor() as u32).max(1);
+    image.resize(
+        side(image.width()),
+        side(image.height()),
+        FilterType::Triangle,
+    )
 }
 
 /// The cells a picture of `natural` pixels takes at `width` columns, with cells of `font`
@@ -148,8 +185,9 @@ pub fn fit(
 /// The pictures asked for or read, by (message id, Content-ID).
 pub type Pictures = HashMap<(i64, String), Picture>;
 
-/// A picture encoded for one size: (message id, Content-ID, columns, rows).
-pub(super) type ProtocolKey = (i64, String, u16, u16);
+/// Each picture encoded for the size it was last drawn at, by (message id, Content-ID): one
+/// entry a picture, replaced when the size changes.
+pub(super) type Protocols = HashMap<(i64, String), ((u16, u16), Rc<SlicedProtocol>)>;
 
 impl Reader {
     /// The reader with pictures drawn by `picker`, or none (`None`: images off).
@@ -174,11 +212,20 @@ impl Reader {
     }
 
     /// The open messages' pictures not asked for yet, as (message id, its provider id,
-    /// Content-ID); none in plain mode or with images off.
+    /// Content-ID): as many as `MAX_PICTURES_IN_FLIGHT` and `MAX_PICTURES_PER_READER` leave
+    /// room for; none in plain mode or with images off.
     pub fn pictures_wanted(&self) -> Vec<(i64, String, String)> {
         if self.placing().is_none() {
             return Vec::new();
         }
+        let loading = self
+            .pictures
+            .values()
+            .filter(|p| matches!(p, Picture::Loading))
+            .count();
+        let room = MAX_PICTURES_IN_FLIGHT
+            .saturating_sub(loading)
+            .min(MAX_PICTURES_PER_READER.saturating_sub(self.pictures.len()));
         let mut wanted = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for (m, open) in self.detail.messages.iter().zip(&self.expanded) {
@@ -189,6 +236,9 @@ impl Reader {
                 continue;
             }
             for inline in &body.pictures {
+                if wanted.len() == room {
+                    return wanted;
+                }
                 let key = (m.id, inline.content_id.clone());
                 if !self.pictures.contains_key(&key) && seen.insert(key) {
                     wanted.push((m.id, m.remote_id.clone(), inline.content_id.clone()));
@@ -207,14 +257,14 @@ impl Reader {
     }
 
     /// A picture read: drawn from now on, or (`None`) left as its placeholder.
-    pub fn picture_read(&mut self, id: i64, content_id: String, image: Option<DynamicImage>) {
+    pub fn picture_read(&mut self, id: i64, content_id: String, image: Option<DecodedPicture>) {
         let state = image.map_or(Picture::Failed, |image| Picture::Ready(Rc::new(image)));
         self.pictures.insert((id, content_id), state);
         self.changed();
     }
 
-    /// Picture `picture` of message `message` encoded for `cols` by `rows` cells, once per
-    /// size; `None` when it is not read, or images are off.
+    /// Picture `picture` of message `message` encoded for `cols` by `rows` cells, again only
+    /// when its size changes; `None` when it is not read, or images are off.
     pub fn protocol(
         &self,
         message: usize,
@@ -225,24 +275,30 @@ impl Reader {
         let picker = self.picker.as_ref()?;
         let m = self.detail.messages.get(message)?;
         let inline = self.rich_bodies.get(&m.id)?.pictures.get(picture)?;
-        let key = (m.id, inline.content_id.clone(), cols, rows);
-        if let Some(found) = self.protocols.borrow().get(&key) {
+        let key = (m.id, inline.content_id.clone());
+        if let Some((_, found)) = self
+            .protocols
+            .borrow()
+            .get(&key)
+            .filter(|(size, _)| *size == (cols, rows))
+        {
             return Some(found.clone());
         }
-        let Some(Picture::Ready(image)) = self.pictures.get(&(m.id, inline.content_id.clone()))
-        else {
+        let Some(Picture::Ready(decoded)) = self.pictures.get(&key) else {
             return None;
         };
         // Scaled, not fit: a mail declares the size it wants drawn, often larger than the
         // picture itself, and a browser stretches it to that size.
         let encoded = SlicedProtocol::new_with_resize(
             picker,
-            (**image).clone(),
+            decoded.image.clone(),
             Size::new(cols, rows),
             Resize::Scale(Some(FilterType::Triangle)),
         );
         let encoded = Rc::new(encoded.ok()?);
-        self.protocols.borrow_mut().insert(key, encoded.clone());
+        self.protocols
+            .borrow_mut()
+            .insert(key, ((cols, rows), encoded.clone()));
         Some(encoded)
     }
 }

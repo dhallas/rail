@@ -6,6 +6,7 @@ use super::MailScreen;
 use super::themes::Saved;
 use crate::tui::app::Effect;
 use crate::tui::data::MailEvent;
+use crate::tui::screens::reader::DecodedPicture;
 
 impl MailScreen {
     /// Flip images (the open reader's too), say so, and save: `images = false` when off; on
@@ -36,7 +37,8 @@ impl MailScreen {
         self.ctx.picker.clone().filter(|_| self.ctx.images)
     }
 
-    /// One `attachment.image` per open message picture not asked for yet.
+    /// One `attachment.image` per open message picture not asked for yet, as many as the
+    /// reader has room for (`Reader::pictures_wanted`).
     pub(crate) fn load_pictures(&mut self) -> Vec<Effect> {
         let Some(reader) = self.reader.as_ref() else {
             return Vec::new();
@@ -65,12 +67,12 @@ impl MailScreen {
             .collect()
     }
 
-    /// A picture read: the open reader's own messages only.
+    /// A picture read: the open reader's own messages only; then the next ones waiting.
     pub(super) fn picture_read(
         &mut self,
         message_id: i64,
         content_id: String,
-        image: Option<image::DynamicImage>,
+        image: Option<DecodedPicture>,
     ) -> Vec<Effect> {
         if let Some(reader) = self
             .reader
@@ -79,6 +81,6 @@ impl MailScreen {
         {
             reader.picture_read(message_id, content_id, image);
         }
-        Vec::new()
+        self.load_pictures()
     }
 }

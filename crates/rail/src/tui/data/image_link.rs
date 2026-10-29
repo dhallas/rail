@@ -1,18 +1,17 @@
 //! `attachment.image` for the reader's pictures: the daemon writes the picture into its cache
-//! and answers the path; the job then decodes it on the blocking pool, so a large picture never
-//! holds up the screen. A picture that cannot be fetched or decoded stays its placeholder: the
-//! log says which step failed, never which picture.
+//! and answers the path; the job then decodes and shrinks it on the blocking pool, so a large
+//! picture never holds up the screen. A picture that cannot be fetched or decoded stays its
+//! placeholder: the log says which step failed, never which picture.
 
 use std::path::PathBuf;
 
-use image::DynamicImage;
 use rail_core::ops::op::AttachmentImage;
 use rail_core::ops::{AttachmentImageRequest, AttachmentImageResponse, OpError};
 
 use super::daemon_link::Link;
 use super::{DaemonLink, MailEvent, job, send};
 use crate::tui::app::Effect;
-use crate::tui::screens::reader::decode_picture;
+use crate::tui::screens::reader::{DecodedPicture, decode_picture};
 
 impl DaemonLink {
     /// The picture `content_id` of message `message_id` (its provider id `remote_id`), fetched
@@ -59,7 +58,7 @@ impl DaemonLink {
     }
 }
 
-async fn decoded(answer: Result<AttachmentImageResponse, OpError>) -> Option<DynamicImage> {
+async fn decoded(answer: Result<AttachmentImageResponse, OpError>) -> Option<DecodedPicture> {
     let response = match answer {
         Ok(response) => response,
         Err(error) => {

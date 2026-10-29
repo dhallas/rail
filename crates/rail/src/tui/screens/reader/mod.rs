@@ -33,7 +33,7 @@ use rail_core::store::view::{BodyState, MessageView, ThreadDetail};
 use ratatui::style::Color;
 
 pub use lines::{LineKind, ReaderLine, Tone};
-pub use pictures::decode as decode_picture;
+pub use pictures::{DecodedPicture, decode as decode_picture};
 pub use rich::{RichBody, from_html};
 
 use crate::tui::clock::Clock;
@@ -127,8 +127,8 @@ pub struct Reader {
     picker: Option<ratatui_image::picker::Picker>,
     /// The pictures asked for or read, by (message id, Content-ID).
     pictures: pictures::Pictures,
-    /// Each drawn picture encoded for the terminal, by (message id, Content-ID, columns, rows).
-    protocols: RefCell<HashMap<pictures::ProtocolKey, Rc<ratatui_image::sliced::SlicedProtocol>>>,
+    /// Each drawn picture encoded for the terminal at its last size, by (message id, Content-ID).
+    protocols: RefCell<pictures::Protocols>,
     /// The last re-read failed: the subject line shows this (escaped) until a read succeeds.
     read_error: Option<String>,
     cursor: usize,

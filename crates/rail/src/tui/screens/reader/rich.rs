@@ -172,8 +172,8 @@ fn picture(
     width: usize,
 ) {
     let key = (placing.message_id, inline.content_id.clone());
-    if let Some(Picture::Ready(image)) = placing.states.get(&key) {
-        let natural = (image.width(), image.height());
+    if let Some(Picture::Ready(decoded)) = placing.states.get(&key) {
+        let natural = decoded.natural;
         let declared = (inline.width, inline.height);
         let columns = u16::try_from(width).unwrap_or(u16::MAX);
         let Some((cols, rows)) = pictures::fit(natural, declared, columns, placing.font) else {
