@@ -15,9 +15,10 @@ use crate::auth::unix_now;
 use crate::config::AccountKind;
 use crate::daemon::DaemonContext;
 use crate::daemon::registry::Call;
+use crate::error::ErrorClass;
 use crate::ops::{
     Action, BodyFetchRequest, BodyOutcome, DraftId, DraftImportRequest, DraftImportResponse,
-    DraftPushRequest, DraftPushResponse, OpError, UNDO_GRACE, new_message_id,
+    DraftPushRequest, DraftPushResponse, ErrorCode, OpError, UNDO_GRACE, new_message_id,
 };
 use crate::provider::{Provider, ProviderError};
 use crate::store::Store;
@@ -210,6 +211,15 @@ async fn refresh_outlook_body(
             ProviderError::NotFound => OpError::not_found("Microsoft 365 no longer has this draft"),
             other => other.into(),
         })?;
+    // Graph refused the list: a draft imported without its attachments would be sent without
+    // them.
+    if body.attachments_unknown {
+        return Err(OpError::new(
+            ErrorCode::Provider,
+            ErrorClass::Permanent,
+            "Rail could not list this draft's attachments in Microsoft 365",
+        ));
+    }
     source.body_text = Some(body.text.clone());
     source.attachments = body
         .attachments
