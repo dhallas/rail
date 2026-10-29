@@ -98,6 +98,8 @@ pub struct ReaderLine {
     pub kind: LineKind,
     text: String,
     segments: Vec<(String, Tone)>,
+    /// The body lines it draws, as `source` says.
+    source: Option<(usize, usize)>,
 }
 
 impl ReaderLine {
@@ -107,6 +109,7 @@ impl ReaderLine {
             kind,
             segments: vec![(text.clone(), tone)],
             text,
+            source: None,
         }
     }
 
@@ -121,6 +124,7 @@ impl ReaderLine {
             kind,
             text,
             segments,
+            source: None,
         }
     }
 
@@ -132,6 +136,20 @@ impl ReaderLine {
     /// Each segment and its tone.
     pub fn segments(&self) -> &[(String, Tone)] {
         &self.segments
+    }
+
+    /// For a body line, the stored text's lines it draws, `(first, end)`: a wrapped row its
+    /// line's, a fold the run it hides. The same text in plain and rich mode, so the cursor
+    /// finds its place again when the layout changes.
+    pub fn source(&self) -> Option<(usize, usize)> {
+        self.source
+    }
+}
+
+/// Every line in `lines` drawn from the stored text's lines `first..end`.
+pub(super) fn tag(lines: &mut [ReaderLine], first: usize, end: usize) {
+    for line in lines {
+        line.source = Some((first, end));
     }
 }
 
@@ -303,15 +321,20 @@ fn text_lines(
     state: &State<'_>,
     width: usize,
 ) {
+    let mut at = 0;
     for (block_index, block) in blocks(text).into_iter().enumerate() {
+        let from = out.len();
         match block {
             Block::Line(raw) => {
                 for row in wrap(&escape(&expand_tabs(raw)), width) {
                     out.push(line(LineKind::Body { message: index }, row, Tone::Plain));
                 }
+                tag(&mut out[from..], at, at + 1);
+                at += 1;
             }
             Block::Quote(rows) if state.unfolded.contains(&(index, block_index)) => {
                 for raw in rows {
+                    let from = out.len();
                     for row in wrap(&escape(&expand_tabs(raw)), width) {
                         let kind = LineKind::Quote {
                             message: index,
@@ -319,6 +342,8 @@ fn text_lines(
                         };
                         out.push(line(kind, row, Tone::Quote));
                     }
+                    tag(&mut out[from..], at, at + 1);
+                    at += 1;
                 }
             }
             Block::Quote(rows) => {
@@ -327,6 +352,8 @@ fn text_lines(
                     block: block_index,
                 };
                 out.push(line(kind, fit(&fold_label(rows.len()), width), Tone::Muted));
+                tag(&mut out[from..], at, at + rows.len());
+                at += rows.len();
             }
         }
     }

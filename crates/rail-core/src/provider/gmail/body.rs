@@ -278,6 +278,7 @@ pub(crate) fn render(
         html: (kind == Kind::Html).then(|| kept.to_string()),
         truncated,
         attachments,
+        attachments_unknown: false,
         links: rendered.links,
     })
 }

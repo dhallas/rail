@@ -26,15 +26,15 @@ use crate::test_support::sample_account;
 
 const ADDRESS: &str = "me@corp.example";
 
-struct Harness {
+pub(super) struct Harness {
     _tmp: tempfile::TempDir,
-    db: PathBuf,
+    pub(super) db: PathBuf,
     writer: WriterHandle,
     _task: WriterTask,
     board: StatusBoard,
 }
 
-fn harness() -> Harness {
+pub(super) fn harness() -> Harness {
     let tmp = tempfile::tempdir().unwrap();
     let db = tmp.path().join("rail.db");
     Store::open(&db)
@@ -56,7 +56,7 @@ fn harness() -> Harness {
 }
 
 /// An engine over `provider` whose clock says `now` (each pass gets its own, later, clock).
-fn engine(h: &Harness, provider: GraphProvider, history_days: u32, now: i64) -> Engine {
+pub(super) fn engine(h: &Harness, provider: GraphProvider, history_days: u32, now: i64) -> Engine {
     engine_on(h, Arc::new(provider), history_days, now)
 }
 
@@ -106,7 +106,7 @@ fn state(h: &Harness) -> SyncStateRow {
     Store::open_reader(&h.db).unwrap().sync_state(1).unwrap()
 }
 
-fn body_of(h: &Harness, id: &str) -> Option<String> {
+pub(super) fn body_of(h: &Harness, id: &str) -> Option<String> {
     Store::open_reader(&h.db)
         .unwrap()
         .conn()
@@ -118,7 +118,7 @@ fn body_of(h: &Harness, id: &str) -> Option<String> {
         .unwrap()
 }
 
-async fn inbox(g: &Graph) {
+pub(super) async fn inbox(g: &Graph) {
     g.mount_root(json!([folder("f-inbox", "Inbox", 0)])).await;
     g.mount_well_known(&[("inbox", "f-inbox")]).await;
 }

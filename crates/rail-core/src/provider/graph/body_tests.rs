@@ -226,23 +226,19 @@ async fn a_refused_listing_asked_for_on_a_cid_alone_keeps_the_body() {
     let body = g.provider().body("m1").await.unwrap();
     assert!(body.text.contains("Hello"), "{:?}", body.text);
     assert_eq!(body.html.as_deref(), Some(html));
-    assert!(body.attachments.is_empty());
+    assert!(body.attachments.is_empty() && body.attachments_unknown);
 }
 
 #[tokio::test]
-async fn a_refused_listing_graph_said_has_attachments_fails_the_fetch() {
+async fn a_refused_listing_graph_said_has_attachments_keeps_the_body_with_them_unknown() {
     let g = Graph::start().await;
-    // Stored as fetched with no attachments, they would never be listed again.
-    let html = "<p>Hello</p><img src=\"cid:logo@x\">";
     let answer = json!({"id": "m1", "hasAttachments": true,
-                        "body": {"contentType": "html", "content": html}});
+                        "body": {"contentType": "html", "content": "<p>Hello</p>"}});
     serve_body(&g, "m1", answer).await;
     refuse_the_listing(&g).await;
-    let error = g.provider().body("m1").await.unwrap_err();
-    assert!(
-        matches!(error, ProviderError::Permanent { .. }),
-        "{error:?}"
-    );
+    let body = g.provider().body("m1").await.unwrap();
+    assert!(body.text.contains("Hello"), "{:?}", body.text);
+    assert!(body.attachments.is_empty() && body.attachments_unknown);
 }
 
 #[tokio::test]
@@ -264,4 +260,5 @@ async fn an_upper_case_cid_lists_the_inline_parts_too() {
         .await;
     let body = g.provider().body("m1").await.unwrap();
     assert_eq!(body.attachments.len(), 1);
+    assert!(!body.attachments_unknown);
 }

@@ -238,6 +238,9 @@ pub struct Body {
     /// True when the body was over `MAX_BODY_BYTES` and `text` ends with the marker.
     pub truncated: bool,
     pub attachments: Vec<AttachmentMeta>,
+    /// True when the provider could not list the attachments: `attachments` is then empty and
+    /// says nothing, and the ones already stored are kept.
+    pub attachments_unknown: bool,
     /// The addresses the text's `[n]` markers stand for (link `n` is `links[n - 1]`), at most
     /// `links::MAX_LINKS`. Outside text: validated again before use.
     pub links: Vec<String>,

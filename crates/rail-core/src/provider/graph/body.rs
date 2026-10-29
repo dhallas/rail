@@ -5,9 +5,8 @@
 //! every named part; each says whether it is a plain file (`reconcile::plain_file`), the only
 //! kind a forward carries and an import fetches, and its Content-ID. Graph says
 //! `hasAttachments` is false when every attachment is inline: the list is then read only when
-//! the HTML names a `cid:` image (in any case). Only that list, refused, leaves the body
-//! without attachments rather than unreadable: a refused list Graph says has attachments fails
-//! the fetch, since a body stored without them is never fetched again.
+//! the HTML names a `cid:` image (in any case). A list Graph refuses leaves the body readable
+//! and says its attachments are unknown, so the ones already stored are kept.
 
 use super::reconcile::plain_file;
 use super::wire::{AttachmentWire, BodyWire, Page};
@@ -74,27 +73,37 @@ impl GraphProvider {
         let content = body.content.unwrap_or_default();
         // Graph says `hasAttachments` is false when every attachment is inline, so HTML that
         // names a `cid:` image is listed anyway.
-        let attachments = if wire.has_attachments == Some(true) {
-            self.attachment_list(id).await?
-        } else if kind == Kind::Html && names_cid(&content) {
-            self.inline_list(id).await?
+        let wanted =
+            wire.has_attachments == Some(true) || kind == Kind::Html && names_cid(&content);
+        let listed = if wanted {
+            self.listed_if_allowed(id).await?
         } else {
-            Vec::new()
+            Some(Vec::new())
         };
-        tokio::task::spawn_blocking(move || render(kind, content.as_bytes(), None, attachments))
-            .await
-            .map_err(|_| unreadable())?
+        let unknown = listed.is_none();
+        let attachments = listed.unwrap_or_default();
+        let mut body = tokio::task::spawn_blocking(move || {
+            render(kind, content.as_bytes(), None, attachments)
+        })
+        .await
+        .map_err(|_| unreadable())??;
+        body.attachments_unknown = unknown;
+        Ok(body)
     }
 
-    /// The list asked for on a `cid:` alone. The body is readable without it: a refused
-    /// listing must not cost it. Anything a retry may fix (or a login) still fails the fetch.
-    async fn inline_list(&self, id: &str) -> Result<Vec<AttachmentMeta>, ProviderError> {
+    /// The attachment list, or `None` when Graph refuses it. The body is readable without it:
+    /// a refused listing must not cost it, nor the attachments already stored. Anything a
+    /// retry may fix (or a login) still fails the fetch, to be tried again.
+    async fn listed_if_allowed(
+        &self,
+        id: &str,
+    ) -> Result<Option<Vec<AttachmentMeta>>, ProviderError> {
         match self.attachment_list(id).await {
             Err(error @ ProviderError::Permanent { .. }) => {
                 tracing::warn!(class = ?error.class(), detail = ?error.detail(), "the attachment list was refused; the body is kept without it");
-                Ok(Vec::new())
+                Ok(None)
             }
-            listed => listed,
+            listed => listed.map(Some),
         }
     }
 
