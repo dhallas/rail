@@ -1,10 +1,11 @@
 //! An HTML body's lines in rich mode: each stretch in its style, wrapping that keeps the
 //! styles, quoted runs folded as plain bodies fold them, outside text escaped, and the cap;
-//! a rich body arriving in an open reader keeps the cursor's line.
+//! a rich body arriving in an open reader keeps the cursor's line and the 10 MiB note.
 
 use std::collections::HashSet;
 
 use rail_core::config::ThreadOrder;
+use rail_core::provider::gmail::TRUNCATED_MARKER;
 use rail_core::provider::html::Style;
 use rail_core::store::view::{BodyState, MAX_SHOWN_BODY_CHARS};
 
@@ -159,4 +160,18 @@ fn a_rich_body_arriving_keeps_the_cursor_on_its_line() {
             .any(|l| l.text() == "[4 quoted lines]")
     );
     assert_eq!(reader.cursor_line().unwrap().text(), "Tail line");
+}
+
+#[test]
+fn a_body_rail_cut_at_10_mib_says_so_in_rich_mode_too() {
+    let body = from_html(QUOTING);
+    let stored = format!("{}{TRUNCATED_MARKER}", joined(&body));
+    let mut reader = rich_reader(stored.clone());
+
+    reader.rich_read(4, Some(body));
+
+    let rich = &reader.rich_bodies[&4];
+    assert_eq!(joined(rich), stored, "the rich text is the stored text");
+    let note = TRUNCATED_MARKER.trim_start();
+    assert!(reader.lines(80).iter().any(|l| l.text() == note));
 }

@@ -230,7 +230,11 @@ impl Reader {
     /// leaves it plain. The cursor stays on its line of text: a fold rich mode draws where the
     /// plain text had none moves the lines under it.
     pub fn rich_read(&mut self, id: i64, body: Option<RichBody>) {
-        let Some(body) = body else { return };
+        let Some(mut body) = body else { return };
+        let stored = self.detail.messages.iter().find(|m| m.id == id);
+        if let Some(BodyState::Text { text, .. }) = stored.map(|m| &m.body) {
+            body = body.noting_cut(text);
+        }
         let (line, anchor) = (self.line_anchor(), self.anchor());
         self.rich_bodies.insert(id, Rc::new(body));
         self.changed();

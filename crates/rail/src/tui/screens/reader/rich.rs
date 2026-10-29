@@ -6,6 +6,7 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use rail_core::provider::gmail::TRUNCATED_MARKER;
 use rail_core::provider::html::{Run, Style, html_styled};
 use rail_core::store::view::MAX_SHOWN_BODY_CHARS;
 
@@ -49,6 +50,21 @@ pub fn from_html(html: &str) -> RichBody {
     runs.truncate(keep);
     runs.retain(|r| !r.text.is_empty());
     RichBody { runs, cut }
+}
+
+impl RichBody {
+    /// The body with the note that Rail kept only the first 10 MiB, unstyled, when the stored
+    /// text `stored` ends with it: the scanner never writes it, and the runs joined stay the
+    /// stored text.
+    pub(super) fn noting_cut(mut self, stored: &str) -> Self {
+        if !self.cut && stored.ends_with(TRUNCATED_MARKER) {
+            self.runs.push(Run {
+                text: TRUNCATED_MARKER.into(),
+                style: Style::PLAIN,
+            });
+        }
+        self
+    }
 }
 
 /// One line of the body: its stretches, unescaped.
