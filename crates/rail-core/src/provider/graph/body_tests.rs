@@ -14,7 +14,9 @@ use crate::provider::http::IMMUTABLE_IDS;
 use crate::provider::{AttachmentMeta, Provider, ProviderError};
 
 /// What the attachment listing asks for.
-const LISTED: &str = "id,name,contentType,size,isInline,contentId";
+/// What the attachment listing asks for: `contentId` is a file attachment's own property, so
+/// it is asked for through a type cast (Graph refuses it on the base type with HTTP 400).
+const LISTED: &str = "id,name,contentType,size,isInline,microsoft.graph.fileAttachment/contentId";
 
 async fn serve_body(g: &Graph, id: &str, answer: Value) {
     Mock::given(method("GET"))
@@ -200,4 +202,25 @@ async fn an_html_body_naming_cid_images_lists_its_inline_parts_though_graph_says
     let body = g.provider().body("m1").await.unwrap();
     assert_eq!(body.attachments.len(), 1);
     assert_eq!(body.attachments[0].content_id.as_deref(), Some("logo@x"));
+}
+
+#[tokio::test]
+async fn a_refused_attachment_listing_keeps_the_body() {
+    let g = Graph::start().await;
+    let html = "<p>Hello</p><img src=\"cid:logo@x\">";
+    let answer = json!({"id": "m1", "hasAttachments": true,
+                        "body": {"contentType": "html", "content": html}});
+    serve_body(&g, "m1", answer).await;
+    let refusal = json!({"error": {"code": "BadRequest",
+                                   "message": "Parsing OData Select and Expand failed"}});
+    Mock::given(method("GET"))
+        .and(path(format!("{ROOT}/me/messages/m1/attachments")))
+        .respond_with(ResponseTemplate::new(400).set_body_json(refusal))
+        .expect(1)
+        .mount(&g.server)
+        .await;
+    let body = g.provider().body("m1").await.unwrap();
+    assert!(body.text.contains("Hello"), "{:?}", body.text);
+    assert_eq!(body.html.as_deref(), Some(html));
+    assert!(body.attachments.is_empty());
 }

@@ -5,7 +5,8 @@
 //! every named part; each says whether it is a plain file (`reconcile::plain_file`), the only
 //! kind a forward carries and an import fetches, and its Content-ID. Graph says
 //! `hasAttachments` is false when every attachment is inline: the list is then read only when
-//! the HTML names a `cid:` image.
+//! the HTML names a `cid:` image. A list Graph refuses leaves the body without attachments
+//! rather than unreadable.
 
 use super::reconcile::plain_file;
 use super::wire::{AttachmentWire, BodyWire, Page};
@@ -67,7 +68,15 @@ impl GraphProvider {
         // names a `cid:` image is listed anyway.
         let names_inline = kind == Kind::Html && content.contains("cid:");
         let attachments = if wire.has_attachments == Some(true) || names_inline {
-            self.attachment_list(id).await?
+            match self.attachment_list(id).await {
+                // The body is readable without its list: a refused listing must not cost it.
+                // Anything a retry may fix (or a login) still fails the fetch, to be tried again.
+                Err(ProviderError::Permanent { .. }) => {
+                    tracing::warn!("the attachment list was refused; the body is kept without it");
+                    Vec::new()
+                }
+                listed => listed?,
+            }
         } else {
             Vec::new()
         };
@@ -78,9 +87,12 @@ impl GraphProvider {
 
     async fn attachment_list(&self, id: &str) -> Result<Vec<AttachmentMeta>, ProviderError> {
         let query = [
+            // `contentId` is a file attachment's own property: Graph refuses it on the base
+            // attachment type (HTTP 400), so it is asked for through a type cast.
             (
                 "$select",
-                "id,name,contentType,size,isInline,contentId".to_string(),
+                "id,name,contentType,size,isInline,microsoft.graph.fileAttachment/contentId"
+                    .to_string(),
             ),
             ("$top", MAX_ATTACHMENTS.to_string()),
         ];
