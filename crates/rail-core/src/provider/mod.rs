@@ -6,6 +6,8 @@ pub mod gmail;
 pub mod graph;
 pub mod html;
 #[cfg(test)]
+mod html_image_tests;
+#[cfg(test)]
 mod html_style_tests;
 #[cfg(test)]
 mod html_tests;

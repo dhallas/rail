@@ -25,11 +25,16 @@
 //! For the reader, `html_styled` gives the same text in runs of one style each: strong
 //! (`b`, `strong`, `h1`-`h6`), emphasised (`i`, `em`), quoted (`blockquote`) and linked (a
 //! numbered link's text and marker). Each style is a saturating count of open tags, not a
-//! stack, so stray or missing end tags cost nothing; line breaks carry no style.
+//! stack, so stray or missing end tags cost nothing; line breaks carry no style. Beside the
+//! runs it lists the `<img>` tags it met (`image`), each standing before the run that follows
+//! it; the text does not change.
 
-use std::fmt;
+mod image;
+mod styled;
 
-use crate::provider::gmail::body::clean;
+pub use image::{Image, MAX_ALT_CHARS, MAX_IMAGES};
+pub use styled::{Run, Style, Styled, html_styled};
+
 use crate::provider::links::{MAX_LINK_BYTES, Numbering, Rendered};
 
 /// Bytes one tag (or `<!...>` declaration) may span before Rail treats it as closed.
@@ -165,85 +170,26 @@ const ENTITIES: &[(&[u8], char)] = &[
     (b"Uuml", 'Ü'),
 ];
 
-/// How a stretch of text is drawn.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Style {
-    pub strong: bool,
-    pub emphasis: bool,
-    pub link: bool,
-    pub quote: bool,
-}
-
-impl Style {
-    pub const PLAIN: Self = Self {
-        strong: false,
-        emphasis: false,
-        link: false,
-        quote: false,
-    };
-}
-
-/// A stretch of text in one style.
-#[derive(Clone, PartialEq, Eq)]
-pub struct Run {
-    pub text: String,
-    pub style: Style,
-}
-
-/// A body's text as styled runs, with the addresses its `[n]` markers stand for (link `n` is
-/// `links[n - 1]`). The runs joined are the body text Rail stores for the same HTML.
-#[derive(Clone, Default, PartialEq, Eq)]
-pub struct Styled {
-    pub runs: Vec<Run>,
-    pub links: Vec<String>,
-}
-
-/// Its length and style only: the text is mail, which must never reach a log.
-impl fmt::Debug for Run {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Run")
-            .field("len", &self.text.len())
-            .field("style", &self.style)
-            .finish()
-    }
-}
-
-/// Counts and styles only, as `Run`'s.
-impl fmt::Debug for Styled {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Styled")
-            .field("runs", &self.runs)
-            .field("links", &self.links.len())
-            .finish()
-    }
+/// What one scan wrote: the text, its links, and, for a styled scan, where each run starts and
+/// where each image stood in the text.
+struct Scanned {
+    out: Vec<u8>,
+    links: Vec<String>,
+    starts: Vec<(usize, Style)>,
+    images: Vec<(usize, Image)>,
 }
 
 /// `html` as plain text with link markers, and the addresses they stand for.
 pub(crate) fn html_render(html: &str) -> Rendered {
-    let (out, links, _) = scan(html, false);
+    let Scanned { out, links, .. } = scan(html, false);
     // Only whole UTF-8 sequences of the input and whole encoded characters are written.
     let text = String::from_utf8(out)
         .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
     Rendered { text, links }
 }
 
-/// `html` as styled runs (see the module documentation), each cleaned of control and format
-/// characters as stored body text is.
-pub fn html_styled(html: &str) -> Styled {
-    let (out, links, starts) = scan(html, true);
-    let mut runs: Vec<Run> = Vec::with_capacity(starts.len());
-    for (index, &(start, style)) in starts.iter().enumerate() {
-        let end = starts.get(index + 1).map_or(out.len(), |&(next, _)| next);
-        let text = clean(&String::from_utf8_lossy(&out[start.min(end)..end]));
-        if !text.is_empty() {
-            runs.push(Run { text, style });
-        }
-    }
-    Styled { runs, links }
-}
-
-/// The scanner's text, its links, and (when `styled`) where each run of one style starts.
-fn scan(html: &str, styled: bool) -> (Vec<u8>, Vec<String>, Vec<(usize, Style)>) {
+/// One scan of `html`; runs and images only when `styled`.
+fn scan(html: &str, styled: bool) -> Scanned {
     let mut scanner = Scanner {
         bytes: html.as_bytes(),
         out: Vec::with_capacity(html.len().min(1 << 20)),
@@ -253,6 +199,8 @@ fn scan(html: &str, styled: bool) -> (Vec<u8>, Vec<String>, Vec<(usize, Style)>)
         open: None,
         counts: Counts::default(),
         starts: styled.then(Vec::new),
+        split: false,
+        images: Vec::new(),
     };
     scanner.run();
     scanner.close_link();
@@ -262,7 +210,12 @@ fn scan(html: &str, styled: bool) -> (Vec<u8>, Vec<String>, Vec<(usize, Style)>)
     let len = scanner.out.len();
     let mut starts = scanner.starts.unwrap_or_default();
     starts.retain(|&(start, _)| start < len);
-    (scanner.out, scanner.links.into_links(), starts)
+    Scanned {
+        out: scanner.out,
+        links: scanner.links.into_links(),
+        starts,
+        images: scanner.images,
+    }
 }
 
 /// `html` as plain text (see the module documentation), for the scanner's own tests.
@@ -339,6 +292,10 @@ struct Scanner<'a> {
     counts: Counts,
     /// Where each run of one style starts in `out`; `None` when only the text is wanted.
     starts: Option<Vec<(usize, Style)>>,
+    /// An image was met since the last run started: the next run starts afresh.
+    split: bool,
+    /// The images met (styled scans only), each with where it stood in `out`.
+    images: Vec<(usize, Image)>,
 }
 
 impl Scanner<'_> {
@@ -386,9 +343,22 @@ impl Scanner<'_> {
     /// Start a run at the end of `out` when `style` differs from the last one.
     fn mark(&mut self, style: Style) {
         if let Some(starts) = &mut self.starts
-            && starts.last().is_none_or(|&(_, last)| last != style)
+            && (self.split || starts.last().is_none_or(|&(_, last)| last != style))
         {
             starts.push((self.out.len(), style));
+            self.split = false;
+        }
+    }
+
+    /// An `<img>` whose attributes are `bytes[from..end]`, in a styled scan, up to
+    /// `MAX_IMAGES`.
+    fn image(&mut self, from: usize, end: usize) {
+        if self.starts.is_none() || self.images.len() >= MAX_IMAGES {
+            return;
+        }
+        if let Some(image) = image::read(&self.bytes[from.min(end)..end]) {
+            self.images.push((self.out.len(), image));
+            self.split = true;
         }
     }
 
@@ -439,7 +409,9 @@ impl Scanner<'_> {
     fn open_link(&mut self, from: usize, end: usize) {
         self.close_link();
         let attributes = &self.bytes[from.min(end)..end];
-        self.open = href(attributes).and_then(|address| self.links.number(&address));
+        self.open = attribute(attributes, b"href")
+            .and_then(decode_value)
+            .and_then(|address| self.links.number(&address));
     }
 
     /// The marker of the open `<a>`, if it has one.
@@ -471,6 +443,10 @@ impl Scanner<'_> {
         }
         let (name, after_name) = self.name(name_at, at);
         let end = self.tag_end(after_name, at);
+        if !closing && name.get() == Some(b"img".as_slice()) {
+            self.image(after_name, end);
+            return end;
+        }
         if name.get() == Some(b"a".as_slice()) {
             if closing {
                 self.close_link();
@@ -632,10 +608,10 @@ impl Scanner<'_> {
     }
 }
 
-/// The `href` value among `attributes` (from the end of the tag name to the end of the tag),
-/// character references decoded and white space trimmed. Quotes of other attributes are
-/// honoured, so `title="href=x"` is not an `href`.
-fn href(attributes: &[u8]) -> Option<String> {
+/// The value of attribute `wanted` (lower case) among `attributes` (from the end of the tag
+/// name to the end of the tag), as written. Quotes of other attributes are honoured, so
+/// `title="href=x"` is not an `href`.
+fn attribute<'a>(attributes: &'a [u8], wanted: &[u8]) -> Option<&'a [u8]> {
     let mut at = 0;
     while at < attributes.len() {
         while attributes
@@ -664,8 +640,8 @@ fn href(attributes: &[u8]) -> Option<String> {
             at += 1;
         }
         let (value, next) = attribute_value(attributes, at);
-        if name.eq_ignore_ascii_case(b"href") {
-            return decode_value(value);
+        if name.eq_ignore_ascii_case(wanted) {
+            return Some(value);
         }
         at = next;
     }
