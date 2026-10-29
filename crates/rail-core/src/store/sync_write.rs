@@ -344,6 +344,11 @@ fn store_body(
          WHERE id = ?1",
         params![message, body.text, body.html, now, links],
     )?;
+    touched.insert(thread);
+    // A list the provider could not give says nothing: the stored one stays.
+    if body.attachments_unknown {
+        return Ok(());
+    }
     tx.execute(
         "DELETE FROM attachments WHERE message_id = ?1",
         params![message],
@@ -364,7 +369,6 @@ fn store_body(
             ],
         )?;
     }
-    touched.insert(thread);
     Ok(())
 }
 

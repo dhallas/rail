@@ -176,3 +176,50 @@ fn a_body_rail_cut_at_10_mib_says_so_in_rich_mode_too() {
     let note = TRUNCATED_MARKER.trim_start();
     assert!(reader.lines(80).iter().any(|l| l.text() == note));
 }
+
+/// Four `x` lines quoted (rich mode folds them, the stored text does not), then six more.
+const REPEATED: &str = "<p>Reply</p><blockquote>x<br>x<br>x<br>x</blockquote>\
+                        <p>x<br>x<br>x<br>x<br>x<br>x</p>";
+
+/// A reader of `REPEATED` with the cursor on the `nth` `x` line of the plain text, after the
+/// rich body arrived.
+fn repeated_after_rich(nth: usize) -> (Reader, Vec<ReaderLine>) {
+    let body = from_html(REPEATED);
+    let mut reader = rich_reader(joined(&body));
+    let lines = reader.lines(80);
+    reader.cursor = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.text() == "x")
+        .nth(nth)
+        .unwrap()
+        .0;
+    reader.rich_read(4, Some(body));
+    let lines = reader.lines(80).to_vec();
+    (reader, lines)
+}
+
+#[test]
+fn a_rich_body_folding_lines_that_read_the_same_keeps_the_cursor_on_its_own() {
+    // The cursor on the second `x` after the quote: two of the four above it fold away.
+    let (reader, lines) = repeated_after_rich(5);
+    let fold = lines
+        .iter()
+        .position(|l| l.text() == "[4 quoted lines]")
+        .unwrap();
+    let second_after = lines
+        .iter()
+        .enumerate()
+        .skip(fold)
+        .filter(|(_, l)| l.text() == "x")
+        .nth(1)
+        .unwrap()
+        .0;
+    assert_eq!(reader.cursor, second_after);
+}
+
+#[test]
+fn a_rich_body_folding_the_cursors_line_puts_the_cursor_on_the_fold() {
+    let (reader, _) = repeated_after_rich(2);
+    assert_eq!(reader.cursor_line().unwrap().text(), "[4 quoted lines]");
+}

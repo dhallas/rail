@@ -12,7 +12,7 @@ use rail_core::provider::gmail::TRUNCATED_MARKER;
 use rail_core::provider::html::{Run, Style, html_styled};
 use rail_core::store::view::MAX_SHOWN_BODY_CHARS;
 
-use super::lines::{LineKind, ReaderLine, Tone};
+use super::lines::{LineKind, ReaderLine, Tone, tag};
 use super::pictures::{self, Inline, Picture};
 use crate::tui::text::{QUOTE_FOLD_MIN, escape, fit, fold_label, wrap};
 
@@ -91,16 +91,20 @@ impl RichBody {
 /// One line of the body: its stretches, unescaped.
 type Segments = Vec<(String, Style)>;
 
+/// A line of the body and the stored text's line it draws (a picture inside a line splits it
+/// into two, both drawing the same stored line).
+type Line = (Segments, usize);
+
 /// A line of the body, or picture `n` of `RichBody::pictures`.
 enum Item {
-    Line(Segments),
+    Line(Line),
     Picture(usize),
 }
 
 /// A line, a run of at least `QUOTE_FOLD_MIN` quoted lines (as `text::blocks`), or a picture.
 enum Block {
-    Line(Segments),
-    Quote(Vec<Segments>),
+    Line(Line),
+    Quote(Vec<Line>),
     Picture(usize),
 }
 
@@ -142,15 +146,21 @@ fn text_block(
     width: usize,
 ) {
     match block {
-        Block::Line(segments) => {
-            push_rows(out, LineKind::Body { message: index }, &segments, width);
+        Block::Line((segments, source)) => {
+            push_rows(
+                out,
+                LineKind::Body { message: index },
+                &segments,
+                width,
+                source,
+            );
         }
         Block::Quote(rows) if unfolded.contains(&(index, block_index)) => {
             let kind = LineKind::Quote {
                 message: index,
                 block: block_index,
             };
-            for segments in rows {
+            for (segments, source) in rows {
                 let quoted: Segments = segments
                     .into_iter()
                     .map(|(text, style)| {
@@ -163,7 +173,7 @@ fn text_block(
                         )
                     })
                     .collect();
-                push_rows(out, kind, &quoted, width);
+                push_rows(out, kind, &quoted, width, source);
             }
         }
         Block::Quote(rows) => {
@@ -173,6 +183,10 @@ fn text_block(
             };
             let label = fit(&fold_label(rows.len()), width);
             out.push(ReaderLine::one(kind, label, Tone::Muted));
+            if let (Some((_, first)), Some((_, last))) = (rows.first(), rows.last()) {
+                let from = out.len() - 1;
+                tag(&mut out[from..], *first, last + 1);
+            }
         }
         Block::Picture(_) => {}
     }
@@ -219,7 +233,7 @@ fn picture(
 /// The runs split at line breaks and pictures, and grouped into blocks.
 fn blocks(runs: &[Run], pictures: &[Inline]) -> Vec<Block> {
     let mut out = Vec::new();
-    let mut quoted: Vec<Segments> = Vec::new();
+    let mut quoted: Vec<Line> = Vec::new();
     for item in split(runs, pictures) {
         let line = match item {
             Item::Line(line) => line,
@@ -229,7 +243,7 @@ fn blocks(runs: &[Run], pictures: &[Inline]) -> Vec<Block> {
                 continue;
             }
         };
-        if is_quoted(&line) {
+        if is_quoted(&line.0) {
             quoted.push(line);
             continue;
         }
@@ -240,7 +254,7 @@ fn blocks(runs: &[Run], pictures: &[Inline]) -> Vec<Block> {
     out
 }
 
-fn end_quote(out: &mut Vec<Block>, quoted: &mut Vec<Segments>) {
+fn end_quote(out: &mut Vec<Block>, quoted: &mut Vec<Line>) {
     if quoted.len() >= QUOTE_FOLD_MIN {
         out.push(Block::Quote(std::mem::take(quoted)));
     } else {
@@ -252,31 +266,33 @@ fn end_quote(out: &mut Vec<Block>, quoted: &mut Vec<Segments>) {
 fn split(runs: &[Run], pictures: &[Inline]) -> Vec<Item> {
     let mut items = Vec::new();
     let mut current = Segments::new();
+    let mut source = 0;
     let mut next = 0;
-    let mut place = |items: &mut Vec<Item>, current: &mut Segments, before: usize| {
+    let mut place = |items: &mut Vec<Item>, current: &mut Segments, source, before: usize| {
         while pictures.get(next).is_some_and(|p| p.at <= before) {
             if !current.is_empty() {
-                items.push(Item::Line(std::mem::take(current)));
+                items.push(Item::Line((std::mem::take(current), source)));
             }
             items.push(Item::Picture(next));
             next += 1;
         }
     };
     for (k, run) in runs.iter().enumerate() {
-        place(&mut items, &mut current, k);
+        place(&mut items, &mut current, source, k);
         for (n, piece) in run.text.split('\n').enumerate() {
             if n > 0 {
-                items.push(Item::Line(std::mem::take(&mut current)));
+                items.push(Item::Line((std::mem::take(&mut current), source)));
+                source += 1;
             }
             if !piece.is_empty() {
                 current.push((piece.to_string(), run.style));
             }
         }
     }
-    place(&mut items, &mut current, usize::MAX);
+    place(&mut items, &mut current, source, usize::MAX);
     // The last line, unless a picture already ended it.
     if !current.is_empty() || !matches!(items.last(), Some(Item::Picture(_))) {
-        items.push(Item::Line(current));
+        items.push(Item::Line((current, source)));
     }
     items
 }
@@ -291,7 +307,15 @@ fn is_quoted(line: &Segments) -> bool {
 
 /// `segments` escaped and wrapped to `width`, each row keeping each character's style.
 /// `wrap` only drops spaces, so every character of a row is found, in order, in the line.
-fn push_rows(out: &mut Vec<ReaderLine>, kind: LineKind, segments: &Segments, width: usize) {
+/// The rows draw the stored text's line `source`.
+fn push_rows(
+    out: &mut Vec<ReaderLine>,
+    kind: LineKind,
+    segments: &Segments,
+    width: usize,
+    source: usize,
+) {
+    let from = out.len();
     let escaped: Vec<(String, Tone)> = segments
         .iter()
         .map(|(text, style)| (escape(text), tone(*style)))
@@ -317,6 +341,7 @@ fn push_rows(out: &mut Vec<ReaderLine>, kind: LineKind, segments: &Segments, wid
         }
         out.push(ReaderLine::of(kind, parts));
     }
+    tag(&mut out[from..], source, source + 1);
 }
 
 /// Plain text in the body's own tone, anything else in its style.

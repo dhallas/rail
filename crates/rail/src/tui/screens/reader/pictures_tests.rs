@@ -128,6 +128,20 @@ fn a_picture_inside_a_line_breaks_it_and_images_off_leave_the_text_alone() {
 }
 
 #[test]
+fn a_line_a_picture_breaks_still_draws_one_stored_line() {
+    let html = r#"<p>one <img src="cid:icon@x" alt="icon"> two</p><p>three</p>"#;
+    let sources: Vec<_> = built(html, Some(&HashMap::new()))
+        .iter()
+        .map(ReaderLine::source)
+        .collect();
+    // "one", the placeholder, " two", the paragraph break, "three".
+    assert_eq!(
+        sources,
+        [Some((0, 1)), None, Some((0, 1)), Some((1, 2)), Some((2, 3))]
+    );
+}
+
+#[test]
 fn tracking_pixels_remote_pictures_and_tiny_declared_ones_take_no_room() {
     let html = r#"<p>Hi</p><img src="cid:pixel@x" width="1" height="1">
                   <img src="https://tracker.example/p.gif"><p>Bye</p>"#;
