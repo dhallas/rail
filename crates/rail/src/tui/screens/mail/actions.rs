@@ -540,6 +540,9 @@ impl MailScreen {
             }
             MailEvent::RichHtmlSaved { result } => self.setting_saved("HTML mail setting", result),
             MailEvent::ImagesSaved { result } => self.setting_saved("images setting", result),
+            MailEvent::RemoteImagesSaved { result } => {
+                self.setting_saved("remote images setting", result)
+            }
             MailEvent::TimeSaved { result } => self.setting_saved("time setting", result),
             MailEvent::ThreadOrderSaved { result } => self.setting_saved("thread order", result),
             MailEvent::DimReadSaved { result } => {

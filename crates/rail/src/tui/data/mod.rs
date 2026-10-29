@@ -103,7 +103,7 @@ pub enum MailEvent {
     /// An inline picture fetched and decoded; `None` when it could not be had.
     Picture {
         message_id: i64,
-        content_id: String,
+        source: crate::tui::screens::reader::PictureSource,
         image: Option<crate::tui::screens::reader::DecodedPicture>,
     },
     /// A message's HTML part scanned for rich mode; `None` when it has none.
@@ -294,6 +294,10 @@ pub enum MailEvent {
     },
     /// `config.toml` was written for `:images`.
     ImagesSaved {
+        result: Result<(), String>,
+    },
+    /// `config.toml` was written for `:remote-images`.
+    RemoteImagesSaved {
         result: Result<(), String>,
     },
 }
@@ -534,6 +538,10 @@ impl fmt::Debug for MailEvent {
                 .finish(),
             Self::ImagesSaved { result } => f
                 .debug_struct("ImagesSaved")
+                .field("ok", &result.is_ok())
+                .finish(),
+            Self::RemoteImagesSaved { result } => f
+                .debug_struct("RemoteImagesSaved")
                 .field("ok", &result.is_ok())
                 .finish(),
         }

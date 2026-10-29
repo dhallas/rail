@@ -121,8 +121,11 @@ pub struct MailContext {
     pub thread_order: ThreadOrder,
     /// `general.rich_html`: HTML bodies drawn with their styles; `:rich-html` flips it.
     pub rich_html: bool,
-    /// `general.images`: rich bodies' inline pictures drawn; `:images` flips it.
+    /// `general.images`: rich bodies' pictures drawn; `:images` flips it.
     pub images: bool,
+    /// `general.remote_images`: remote pictures fetched without the key; `:remote-images`
+    /// flips it.
+    pub remote_images: bool,
     /// How this terminal draws pictures, asked once at start; `None` when it was not asked.
     pub picker: Option<ratatui_image::picker::Picker>,
     /// How read list rows are dimmed; `:dim-read` cycles the modes.

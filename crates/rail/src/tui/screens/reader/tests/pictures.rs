@@ -1,5 +1,6 @@
-//! Inline pictures through the mail screen: an open HTML message's `cid:` picture asked of
-//! the daemon once, its rows kept and drawn, and `:images` hiding it, saved to `config.toml`.
+//! Pictures through the mail screen: an open HTML message's `cid:` picture asked of the daemon
+//! once, its rows kept and drawn, and `:images` hiding it, saved to `config.toml`; a remote
+//! picture held back until `i` loads the thread's, or `:remote-images` loads them always.
 
 use crossterm::event::KeyCode;
 use image::RgbaImage;
@@ -147,4 +148,90 @@ async fn a_mail_with_many_pictures_has_only_the_readers_cap_asked_for() {
     open_toms_card(&mut f).await;
     // Each answer lets the next one be asked for, until the cap.
     assert_eq!(image_calls(&f).len(), MAX_PICTURES_PER_READER);
+}
+
+const SALE: &str = "https://cdn.example.com/sale.png";
+
+/// m1 shows a remote 160 by 64 picture, whose bytes the fake daemon has.
+async fn with_a_remote_picture() -> (Fixture, tempfile::TempDir) {
+    let (f, dir) = with_a_picture().await;
+    let html = format!(
+        r#"<p>Hi Dana,</p><img src="{SALE}" alt="Sale" width="160" height="64"><p>Tom</p>"#
+    );
+    Store::open(&f.paths.db_file())
+        .unwrap()
+        .conn()
+        .execute(
+            "UPDATE messages SET body_html = ?1 WHERE remote_id = 'm1'",
+            [html],
+        )
+        .unwrap();
+    let answer = f.fake.image_answers.lock().unwrap()["logo@x"].clone();
+    f.fake
+        .image_answers
+        .lock()
+        .unwrap()
+        .insert(SALE.into(), answer);
+    (f, dir)
+}
+
+fn remote_calls(f: &Fixture) -> Vec<FakeCall> {
+    f.fake
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|c| matches!(c, FakeCall::RemoteImage(_)))
+        .cloned()
+        .collect()
+}
+
+fn has_hint(f: &Fixture) -> bool {
+    f.screen
+        .reader()
+        .unwrap()
+        .lines(80)
+        .iter()
+        .any(|l| l.text() == "Remote pictures are not shown; i loads them.")
+}
+
+#[tokio::test]
+async fn a_remote_picture_waits_for_i_and_is_then_fetched_once_and_drawn() {
+    let (mut f, _dir) = with_a_remote_picture().await;
+    press(&mut f, KeyCode::Enter).await;
+    open_toms_card(&mut f).await;
+    assert_eq!(remote_calls(&f), [], "nothing fetched before the key");
+    assert!(has_hint(&f));
+    assert_eq!(picture_rows(&f), 0);
+
+    press(&mut f, KeyCode::Char('i')).await;
+    assert_eq!(remote_calls(&f), [FakeCall::RemoteImage(SALE.into())]);
+    assert!(!has_hint(&f));
+    assert_eq!(picture_rows(&f), 4);
+
+    press(&mut f, KeyCode::Char('i')).await;
+    assert_eq!(remote_calls(&f).len(), 1, "loaded once");
+}
+
+#[tokio::test]
+async fn colon_remote_images_loads_them_always_and_saves_the_choice() {
+    let (mut f, _dir) = with_a_remote_picture().await;
+    press(&mut f, KeyCode::Char(':')).await;
+    keys(&mut f, "remote-images").await;
+    press(&mut f, KeyCode::Enter).await;
+    assert!(f.screen.status_line().contains("remote images: on"));
+    let text = std::fs::read_to_string(f.paths.config_file()).unwrap();
+    assert!(text.contains("remote_images = true"), "{text}");
+
+    press(&mut f, KeyCode::Enter).await;
+    open_toms_card(&mut f).await;
+    assert_eq!(remote_calls(&f).len(), 1, "fetched without the key");
+    assert!(!has_hint(&f));
+
+    press(&mut f, KeyCode::Char(':')).await;
+    keys(&mut f, "remote-images").await;
+    press(&mut f, KeyCode::Enter).await;
+    assert!(f.screen.status_line().contains("remote images: off"));
+    let text = std::fs::read_to_string(f.paths.config_file()).unwrap();
+    assert!(!text.contains("remote_images"), "{text}");
 }

@@ -87,6 +87,7 @@ fn context(
         thread_order: config.general.thread_order,
         rich_html: config.general.rich_html,
         images: config.general.images,
+        remote_images: config.general.remote_images,
         picker: picker(),
         dim_read: config.general.dim_read,
         hyperlinks: hyperlinks_supported(|name| std::env::var(name).ok()),

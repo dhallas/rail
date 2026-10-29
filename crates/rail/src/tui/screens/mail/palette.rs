@@ -143,7 +143,7 @@ impl MailScreen {
     }
 
     /// Display settings, each saying what it will do next.
-    fn toggles(&self) -> [(&'static str, &'static str, Target); 8] {
+    fn toggles(&self) -> [(&'static str, &'static str, Target); 9] {
         let hints = if self.hints {
             "Turn the key hints off"
         } else {
@@ -182,6 +182,11 @@ impl MailScreen {
         } else {
             "Show pictures in HTML mail"
         };
+        let remote = if self.ctx.remote_images {
+            "Ask before loading remote pictures"
+        } else {
+            "Always load remote pictures"
+        };
         [
             (dim_read, "dim-read", Target::DimRead),
             (hints, "hints", Target::Hints),
@@ -191,6 +196,7 @@ impl MailScreen {
             (counts, "search-counts", Target::SearchCounts),
             (rich, "rich-html", Target::RichHtml),
             (images, "images", Target::Images),
+            (remote, "remote-images", Target::RemoteImages),
         ]
     }
 

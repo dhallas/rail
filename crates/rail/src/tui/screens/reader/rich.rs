@@ -2,10 +2,12 @@
 //! text Rail stores) as reader lines, each stretch in its style. Quoted runs fold as a plain
 //! body's do: a line is quoted when its first visible stretch is in a `blockquote` or its text
 //! starts with `>`. Every outside string is escaped before it is measured or wrapped. With
-//! images on, each `cid:` picture (`pictures`) stands where the mail puts it, breaking the line
-//! it falls in: its rows once it is decoded, `[image: alt]` until then.
+//! images on, each picture (`pictures`) stands where the mail puts it, breaking the line it
+//! falls in: its rows once it is decoded, `[image: alt]` until then (a remote one without alt
+//! text, often a tracking pixel, takes no room). While a thread's remote pictures are held
+//! back, a body that has some starts with a hint naming the key that loads them.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 
 use rail_core::provider::gmail::TRUNCATED_MARKER;
@@ -13,7 +15,7 @@ use rail_core::provider::html::{Run, Style, html_styled};
 use rail_core::store::view::MAX_SHOWN_BODY_CHARS;
 
 use super::lines::{LineKind, ReaderLine, Tone, tag};
-use super::pictures::{self, Inline, Picture};
+use super::pictures::{self, Inline, Picture, Pictures, Source};
 use crate::tui::text::{QUOTE_FOLD_MIN, escape, fit, fold_label, wrap};
 
 /// A message's HTML part as styled runs, cut to `MAX_SHOWN_BODY_CHARS` as the plain text is.
@@ -65,12 +67,14 @@ pub fn from_html(html: &str) -> RichBody {
     }
 }
 
-/// What placing pictures takes: the pictures read so far by (message id, Content-ID), the
-/// terminal cell's size in pixels, and this message's id.
+/// What placing pictures takes: the pictures read so far by (message id, source), the
+/// terminal cell's size in pixels, this message's id, and the key that loads remote pictures
+/// while the thread has not.
 pub(super) struct Placing<'a> {
-    pub states: &'a HashMap<(i64, String), Picture>,
+    pub states: &'a Pictures,
     pub font: (u16, u16),
     pub message_id: i64,
+    pub remote_hint: Option<&'a str>,
 }
 
 impl RichBody {
@@ -124,6 +128,14 @@ pub(super) fn lines(
     } else {
         &[]
     };
+    let held = placing
+        .and_then(|p| p.remote_hint)
+        .filter(|_| shown.iter().any(|p| matches!(p.source, Source::Remote(_))));
+    if let Some(key) = held {
+        let hint = escape(&format!("Remote pictures are not shown; {key} loads them."));
+        let kind = LineKind::Body { message: index };
+        out.push(ReaderLine::one(kind, fit(&hint, width), Tone::Muted));
+    }
     let mut block_index = 0;
     for block in blocks(&body.runs, shown) {
         if let Block::Picture(n) = block {
@@ -201,7 +213,7 @@ fn picture(
     placing: &Placing<'_>,
     width: usize,
 ) {
-    let key = (placing.message_id, inline.content_id.clone());
+    let key = (placing.message_id, inline.source.clone());
     if let Some(Picture::Ready(decoded)) = placing.states.get(&key) {
         let natural = decoded.natural;
         let declared = (inline.width, inline.height);
@@ -221,7 +233,9 @@ fn picture(
         }
         return;
     }
-    let label = if inline.alt.is_empty() {
+    let label = if inline.alt.is_empty() && matches!(inline.source, Source::Remote(_)) {
+        return;
+    } else if inline.alt.is_empty() {
         "[image]".to_string()
     } else {
         format!("[image: {}]", inline.alt)

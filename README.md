@@ -311,6 +311,7 @@ are in, with `*` after the ones set in `config.toml`.
 | `reader.open_browser` | reader | `o` | Open the message in the browser. |
 | `reader.attachments` | reader | `a` | List the attachments. |
 | `reader.save_attachments` | reader | `w` | Save this message's attachments. |
+| `reader.load_images` | reader | `i` | Load this thread's remote pictures. |
 | `reader.follow_link` | reader | `g x` | Open a link. |
 | `reader.back` | reader | `q` `esc` | Close the thread. |
 | `reader.down` | reader | `j` `down` | Next line. |
@@ -446,14 +447,21 @@ hides, for the session, the headers of every open message: `From:`, `To:` and `C
 `Date: Fri 10 Oct 2025 12:40`, and `Subject:` when it differs from the thread's. With
 `icons = "ascii"` the arrows are `>` and `v` and the rules `-`.
 
+The pictures a message carries itself are drawn as soon as it opens. **Remote pictures**, the ones
+an HTML message loads from the web, are held back, because fetching one tells its sender you
+opened the mail: the message starts with `Remote pictures are not shown; i loads them.`, a remote
+picture with alt text shows `[image: …]` in its place, and `i` loads the open thread's remote
+pictures. The daemon fetches them (never the terminal), only over `https` from public addresses,
+with no cookies or referrer, at most 5 MiB each, and keeps them for a week in Rail's private image
+cache. `remote_images = true` under `[general]` or `:remote-images` loads them in every thread.
+
 HTML mail is shown as Rail's own rendering of it, the same text Rail stores and searches, with
 its bold and headings bold, its italics italic, its quotes dimmed and its links underlined
 (`rich_html = false` under `[general]` or `:rich-html` shows that text without the styles), with
-its inline pictures (the ones the message itself carries, at the size it asks for; `[image: …]`
-until they arrive, and for any past the first 32 in an open thread; pictures of a few pixels, such
-as tracking pixels, left out; remote pictures are never fetched; mail stored by a Rail older than
-0.4.0 gains its pictures the first time it is opened, with one more fetch of that message;
-`images = false` or `:images` leaves them all out), and with each link as a
+its pictures (at the size it asks for; `[image: …]` until they arrive, and for any past the first
+32 in an open thread; pictures of a few pixels, such as tracking pixels, left out; mail stored by
+a Rail older than 0.4.0 gains its inline pictures the first time it is opened, with one more fetch
+of that message; `images = false` or `:images` leaves them all out), and with each link as a
 numbered marker such as `[1]`; in terminals that support hyperlinks (iTerm2, WezTerm, kitty, Ghostty, VS Code, Windows
 Terminal, Hyper, foot, Alacritty, GNOME Terminal and other VTE terminals; not inside tmux or
 screen) the marker is clickable; while a box such as help or a confirmation is open the markers
@@ -598,6 +606,11 @@ choice (`rich_html = false` under `[general]`; styles on removes the key); a sav
 open reader and every one opened after, and saves the choice (`images = false` under `[general]`;
 showing them removes the key); a save that fails says `Could not save the images setting: …` and
 keeps the choice for this session.
+
+`remote-images` loads remote pictures in every thread from now on (`remote images: on`), the open
+one too, or holds them back again until `i` (`remote images: off`), and saves the choice
+(`remote_images = true` under `[general]`; off removes the key); a save that fails says
+`Could not save the remote images setting: …` and keeps the choice for this session.
 
 `?` shows the keys of the view you are in, marking with `*` the ones set in
 `config.toml`; `?` again (or whatever `global.help` is bound to), `Esc` or `q` closes it. Help and
@@ -1389,6 +1402,7 @@ running syncs carry on unchanged.
 | `saved_search_counts` | `true` | Unread counts beside each saved search in the sidebar. `false` leaves them out and skips the count queries, the one thing saved searches cost on a large mailbox. `:search-counts` toggles it and saves it. |
 | `rich_html` | `true` | The reader draws HTML mail's bold, italic, quoted and linked text in those styles. `false` shows the same text plain. `:rich-html` toggles it and saves it. |
 | `images` | `true` | With `rich_html`, the reader draws the pictures an HTML message carries inline, through the terminal's image protocol (kitty, iTerm2 or sixel) or as coloured half blocks elsewhere. Rail asks the terminal which it speaks as it starts, waiting up to 2 s for one that does not answer; with `TERM` unset, empty or `dumb` it does not ask and draws half blocks. `false` leaves them out. `:images` toggles it and saves it. |
+| `remote_images` | `false` | With `images`, the reader fetches every HTML message's remote pictures, which tells their senders you opened the mail. `false` holds them back until `i` loads one thread's. `:remote-images` toggles it and saves it. |
 
 ### `[[saved_searches]]`
 

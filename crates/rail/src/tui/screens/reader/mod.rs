@@ -33,7 +33,7 @@ use rail_core::store::view::{BodyState, MessageView, ThreadDetail};
 use ratatui::style::Color;
 
 pub use lines::{LineKind, ReaderLine, Tone};
-pub use pictures::{DecodedPicture, decode as decode_picture};
+pub use pictures::{DecodedPicture, Source as PictureSource, decode as decode_picture};
 pub use rich::{RichBody, from_html};
 
 use crate::tui::clock::Clock;
@@ -125,10 +125,14 @@ pub struct Reader {
     rich_asked: HashSet<i64>,
     /// With images on (`images`, `:images`), what draws them; `None` with images off.
     picker: Option<ratatui_image::picker::Picker>,
-    /// The pictures asked for or read, by (message id, Content-ID).
+    /// The pictures asked for or read, by (message id, source).
     pictures: pictures::Pictures,
-    /// Each drawn picture encoded for the terminal at its last size, by (message id, Content-ID).
+    /// Each drawn picture encoded for the terminal at its last size, by (message id, source).
     protocols: RefCell<pictures::Protocols>,
+    /// This thread's remote pictures are fetched (`remote_images`, or the key).
+    remote: bool,
+    /// The key that loads them, for the hint while they are not.
+    remote_key: String,
     /// The last re-read failed: the subject line shows this (escaped) until a read succeeds.
     read_error: Option<String>,
     cursor: usize,
@@ -184,6 +188,8 @@ impl Reader {
             picker: None,
             pictures: HashMap::new(),
             protocols: RefCell::new(HashMap::new()),
+            remote: false,
+            remote_key: String::new(),
             read_error: None,
             cursor: 0,
             scroll: 0,
@@ -547,6 +553,7 @@ impl Reader {
             read_error: self.read_error.as_deref(),
             rich: self.rich.then_some(&self.rich_bodies),
             pictures: self.placing(),
+            remote_hint: self.remote_hint(),
         };
         let built = Rc::new(cards::build(
             &self.detail,
@@ -609,6 +616,9 @@ impl Reader {
             Action::ReaderExpand => self.toggle_message(&lines),
             Action::ReaderUnfold => self.toggle_fold(&lines),
             Action::ReaderHeaders => self.toggle_headers(&lines),
+            Action::ReaderLoadImages => {
+                self.load_remote();
+            }
             Action::ReaderBack => return ReaderOutcome::Back,
             Action::ReaderFollowLink => return ReaderOutcome::FollowLink,
             Action::ReaderOpenBrowser => return ReaderOutcome::OpenBrowser,
