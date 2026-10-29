@@ -113,6 +113,7 @@ async fn attachment_fixture_icons(
                     mime_type: mime_type.to_string(),
                     size,
                     plain_file: true,
+                    content_id: None,
                 })
                 .collect();
             let body = Body {

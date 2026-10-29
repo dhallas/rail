@@ -13,6 +13,11 @@ use super::fixtures::{Graph, ROOT};
 use crate::provider::http::IMMUTABLE_IDS;
 use crate::provider::{AttachmentMeta, Provider, ProviderError};
 
+/// What the attachment listing asks for.
+/// What the attachment listing asks for: `contentId` is a file attachment's own property, so
+/// it is asked for through a type cast (Graph refuses it on the base type with HTTP 400).
+const LISTED: &str = "id,name,contentType,size,isInline,microsoft.graph.fileAttachment/contentId";
+
 async fn serve_body(g: &Graph, id: &str, answer: Value) {
     Mock::given(method("GET"))
         .and(path(format!("{ROOT}/me/messages/{id}")))
@@ -66,7 +71,7 @@ async fn attachments_are_listed_with_the_body_inline_ones_too() {
         {"@odata.type": "#microsoft.graph.fileAttachment", "id": "a1", "name": "plan.pdf",
          "contentType": "application/pdf", "size": 2048, "isInline": false},
         {"@odata.type": "#microsoft.graph.fileAttachment", "id": "a2", "name": "logo.png",
-         "contentType": "image/PNG", "size": 10, "isInline": true},
+         "contentType": "image/PNG", "size": 10, "isInline": true, "contentId": "<logo@x>"},
         {"@odata.type": "#microsoft.graph.referenceAttachment", "id": "a3",
          "name": "Budget.xlsx", "contentType": null, "size": 0, "isInline": false},
         {"id": "a/4", "name": "sneaky", "contentType": "text/plain", "size": 1, "isInline": false},
@@ -75,7 +80,7 @@ async fn attachments_are_listed_with_the_body_inline_ones_too() {
     ]});
     Mock::given(method("GET"))
         .and(path(format!("{ROOT}/me/messages/m1/attachments")))
-        .and(query_param("$select", "id,name,contentType,size,isInline"))
+        .and(query_param("$select", LISTED))
         .respond_with(ResponseTemplate::new(200).set_body_json(listed))
         .expect(1)
         .mount(&g.server)
@@ -87,12 +92,17 @@ async fn attachments_are_listed_with_the_body_inline_ones_too() {
         mime_type: mime.into(),
         size,
         plain_file,
+        content_id: None,
+    };
+    let logo = AttachmentMeta {
+        content_id: Some("logo@x".into()),
+        ..meta("a2", "logo.png", "image/png", 10, false)
     };
     assert_eq!(
         body.attachments,
         [
             meta("a1", "plan.pdf", "application/pdf", 2048, true),
-            meta("a2", "logo.png", "image/png", 10, false),
+            logo,
             meta("a3", "Budget.xlsx", "application/octet-stream", 0, false),
             meta("a5", "Re: plan", "application/octet-stream", 300, false),
         ],
@@ -169,4 +179,86 @@ async fn a_gone_attachment_is_not_found_and_unsafe_ids_are_refused_unsent() {
         .unwrap_err();
     assert!(matches!(refused, ProviderError::Permanent { .. }));
     assert_eq!(g.server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn an_html_body_naming_cid_images_lists_its_inline_parts_though_graph_says_none() {
+    let g = Graph::start().await;
+    // Graph answers `hasAttachments: false` when every attachment is inline.
+    let answer = json!({"id": "m1", "hasAttachments": false,
+                        "body": {"contentType": "html", "content": "<img src=\"cid:logo@x\">"}});
+    serve_body(&g, "m1", answer).await;
+    let listed = json!({"value": [
+        {"@odata.type": "#microsoft.graph.fileAttachment", "id": "a1", "name": "logo.png",
+         "contentType": "image/png", "size": 10, "isInline": true, "contentId": "logo@x"}
+    ]});
+    Mock::given(method("GET"))
+        .and(path(format!("{ROOT}/me/messages/m1/attachments")))
+        .and(query_param("$select", LISTED))
+        .respond_with(ResponseTemplate::new(200).set_body_json(listed))
+        .expect(1)
+        .mount(&g.server)
+        .await;
+    let body = g.provider().body("m1").await.unwrap();
+    assert_eq!(body.attachments.len(), 1);
+    assert_eq!(body.attachments[0].content_id.as_deref(), Some("logo@x"));
+}
+
+async fn refuse_the_listing(g: &Graph) {
+    let refusal = json!({"error": {"code": "BadRequest",
+                                   "message": "Parsing OData Select and Expand failed"}});
+    Mock::given(method("GET"))
+        .and(path(format!("{ROOT}/me/messages/m1/attachments")))
+        .respond_with(ResponseTemplate::new(400).set_body_json(refusal))
+        .expect(1)
+        .mount(&g.server)
+        .await;
+}
+
+#[tokio::test]
+async fn a_refused_listing_asked_for_on_a_cid_alone_keeps_the_body() {
+    let g = Graph::start().await;
+    let html = "<p>Hello</p><img src=\"cid:logo@x\">";
+    let answer = json!({"id": "m1", "hasAttachments": false,
+                        "body": {"contentType": "html", "content": html}});
+    serve_body(&g, "m1", answer).await;
+    refuse_the_listing(&g).await;
+    let body = g.provider().body("m1").await.unwrap();
+    assert!(body.text.contains("Hello"), "{:?}", body.text);
+    assert_eq!(body.html.as_deref(), Some(html));
+    assert!(body.attachments.is_empty() && body.attachments_unknown);
+}
+
+#[tokio::test]
+async fn a_refused_listing_graph_said_has_attachments_keeps_the_body_with_them_unknown() {
+    let g = Graph::start().await;
+    let answer = json!({"id": "m1", "hasAttachments": true,
+                        "body": {"contentType": "html", "content": "<p>Hello</p>"}});
+    serve_body(&g, "m1", answer).await;
+    refuse_the_listing(&g).await;
+    let body = g.provider().body("m1").await.unwrap();
+    assert!(body.text.contains("Hello"), "{:?}", body.text);
+    assert!(body.attachments.is_empty() && body.attachments_unknown);
+}
+
+#[tokio::test]
+async fn an_upper_case_cid_lists_the_inline_parts_too() {
+    let g = Graph::start().await;
+    let answer = json!({"id": "m1", "hasAttachments": false,
+                        "body": {"contentType": "html", "content": "<img src=\"CID:logo@x\">"}});
+    serve_body(&g, "m1", answer).await;
+    let listed = json!({"value": [
+        {"@odata.type": "#microsoft.graph.fileAttachment", "id": "a1", "name": "logo.png",
+         "contentType": "image/png", "size": 10, "isInline": true, "contentId": "logo@x"}
+    ]});
+    Mock::given(method("GET"))
+        .and(path(format!("{ROOT}/me/messages/m1/attachments")))
+        .and(query_param("$select", LISTED))
+        .respond_with(ResponseTemplate::new(200).set_body_json(listed))
+        .expect(1)
+        .mount(&g.server)
+        .await;
+    let body = g.provider().body("m1").await.unwrap();
+    assert_eq!(body.attachments.len(), 1);
+    assert!(!body.attachments_unknown);
 }

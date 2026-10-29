@@ -20,6 +20,7 @@ mod header;
 mod header_tests;
 mod hints;
 mod hints_toggle;
+mod images_toggle;
 mod layout;
 mod list;
 mod list_view;
@@ -28,6 +29,7 @@ mod m365;
 mod modal_tests;
 mod palette;
 mod reading;
+mod rich_html_toggle;
 mod saved;
 mod search_counts_toggle;
 mod selection;
@@ -117,6 +119,12 @@ pub struct MailContext {
     /// `general.thread_order`: how the reader runs a thread's older messages; `:thread-order`
     /// flips it for the session.
     pub thread_order: ThreadOrder,
+    /// `general.rich_html`: HTML bodies drawn with their styles; `:rich-html` flips it.
+    pub rich_html: bool,
+    /// `general.images`: rich bodies' inline pictures drawn; `:images` flips it.
+    pub images: bool,
+    /// How this terminal draws pictures, asked once at start; `None` when it was not asked.
+    pub picker: Option<ratatui_image::picker::Picker>,
     /// How read list rows are dimmed; `:dim-read` cycles the modes.
     pub dim_read: DimRead,
     /// The terminal shows OSC 8 hyperlinks.

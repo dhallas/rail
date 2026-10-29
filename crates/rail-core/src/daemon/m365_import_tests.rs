@@ -118,6 +118,7 @@ async fn an_attachment_removed_in_outlook_is_not_imported_from_the_cache() {
             mime_type: "text/plain".into(),
             size: 12,
             plain_file: true,
+            content_id: None,
         }],
     );
     remote_body(&c, body(false)).await;
@@ -211,4 +212,30 @@ async fn reopening_an_imported_outlook_draft_keeps_local_edits() {
             })
             .count();
     assert_eq!(bodies, 1, "only the first import refreshes the remote body");
+}
+
+#[tokio::test]
+async fn an_outlook_draft_whose_attachment_list_is_refused_is_not_imported() {
+    let c = corp().await;
+    cache(&c, vec![]);
+    remote_body(&c, body(true)).await;
+    Mock::given(method("GET"))
+        .and(path(format!("{ROOT}/me/messages/g-od1/attachments")))
+        .respond_with(
+            ResponseTemplate::new(400)
+                .set_body_json(json!({"error": {"code": "BadRequest", "message": "no"}})),
+        )
+        .mount(&c.g.server)
+        .await;
+    let error = c
+        .client
+        .call::<DraftImport>(&import(&c, "refused-1"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (error.code, error.class),
+        (ErrorCode::Provider, ErrorClass::Permanent)
+    );
+    assert!(c.store().draft_token_owner("refused-1").unwrap().is_none());
+    assert!(!c.paths.import_dir("refused-1").unwrap().exists());
 }

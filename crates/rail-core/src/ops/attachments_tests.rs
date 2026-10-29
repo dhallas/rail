@@ -1,6 +1,7 @@
 //! The two attachment op names and their place outside the retry-safe set, and the count-only
 //! `Debug` every attachment type on the wire has.
 
+use super::attachment_image::{AttachmentImageRequest, AttachmentImageResponse};
 use super::attachments::*;
 use super::{OpError, names};
 
@@ -244,4 +245,28 @@ fn openable_strips_parameters_and_ignores_case() {
         assert_eq!(openable(closed), None, "{closed}");
     }
     assert_eq!(OPENABLE.len(), 21);
+}
+
+/// `attachment.image` follows the saved-search pair, may be resent (it only reads and caches),
+/// and prints nothing of the request or the answer.
+#[test]
+fn the_image_operation_is_registered_retry_safe_and_prints_nothing() {
+    assert_eq!(names::ATTACHMENT_IMAGE, "attachment.image");
+    assert_eq!(names::ALL.last(), Some(&names::ATTACHMENT_IMAGE));
+    assert!(crate::daemon::retry_safe(names::ATTACHMENT_IMAGE));
+    let request = AttachmentImageRequest {
+        account: "work".into(),
+        message_id: "m1".into(),
+        content_id: "logo@x".into(),
+    };
+    let response = AttachmentImageResponse {
+        path: "/cache/images/ab.png".into(),
+        mime_type: "image/png".into(),
+    };
+    let printed = format!("{request:?} {response:?}");
+    for mail in ["work", "m1", "logo", "cache", "png"] {
+        assert!(!printed.contains(mail), "{mail} in {printed}");
+    }
+    assert_eq!(super::image_extension(" IMAGE/JPEG "), Some("jpg"));
+    assert_eq!(super::image_extension("image/svg+xml"), None);
 }

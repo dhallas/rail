@@ -4,12 +4,16 @@
 //! escaped text, or `escape`).
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use rail_core::config::ThreadOrder;
 use rail_core::provider::Mailbox;
+use rail_core::provider::html::Style;
 use rail_core::store::view::{BodyState, MessageView, ThreadDetail};
 
 use super::ReaderAccount;
+use super::pictures::Pictures;
+use super::rich::{self, Placing, RichBody};
 use crate::tui::clock::Clock;
 use crate::tui::screens::mail::Glyphs;
 use crate::tui::text::{Block, blocks, escape, expand_tabs, fit, fold_label, wrap};
@@ -48,6 +52,15 @@ pub enum LineKind {
     Status {
         message: usize,
     },
+    /// Row `row` of picture `picture` of a rich body, `cols` by `rows` cells; the view draws
+    /// the picture over these rows.
+    Picture {
+        message: usize,
+        picture: usize,
+        row: u16,
+        cols: u16,
+        rows: u16,
+    },
     /// A rule between the title block, the newest message and the cards.
     Rule,
     Gap,
@@ -63,7 +76,8 @@ impl LineKind {
             | Self::Body { message }
             | Self::Fold { message, .. }
             | Self::Quote { message, .. }
-            | Self::Status { message } => Some(message),
+            | Self::Status { message }
+            | Self::Picture { message, .. } => Some(message),
             Self::Note | Self::Rule | Self::Gap => None,
         }
     }
@@ -82,6 +96,8 @@ pub enum Tone {
     Badge,
     /// A card's number: the text colour on the border colour.
     Number,
+    /// A stretch of an HTML body in rich mode, in its style.
+    Rich(Style),
 }
 
 /// One line, escaped and at most the width it was built for: segments, each drawn in its tone,
@@ -93,6 +109,8 @@ pub struct ReaderLine {
     pub kind: LineKind,
     text: String,
     segments: Vec<(String, Tone)>,
+    /// The body lines it draws, as `source` says.
+    source: Option<(usize, usize)>,
 }
 
 impl ReaderLine {
@@ -102,6 +120,7 @@ impl ReaderLine {
             kind,
             segments: vec![(text.clone(), tone)],
             text,
+            source: None,
         }
     }
 
@@ -116,6 +135,7 @@ impl ReaderLine {
             kind,
             text,
             segments,
+            source: None,
         }
     }
 
@@ -127,6 +147,20 @@ impl ReaderLine {
     /// Each segment and its tone.
     pub fn segments(&self) -> &[(String, Tone)] {
         &self.segments
+    }
+
+    /// For a body line, the stored text's lines it draws, `(first, end)`: a wrapped row its
+    /// line's, a fold the run it hides. The same text in plain and rich mode, so the cursor
+    /// finds its place again when the layout changes.
+    pub fn source(&self) -> Option<(usize, usize)> {
+        self.source
+    }
+}
+
+/// Every line in `lines` drawn from the stored text's lines `first..end`.
+pub(super) fn tag(lines: &mut [ReaderLine], first: usize, end: usize) {
+    for line in lines {
+        line.source = Some((first, end));
     }
 }
 
@@ -158,6 +192,11 @@ pub(super) struct State<'a> {
     pub order: ThreadOrder,
     /// A failed re-read's error (escaped), drawn in place of the subject.
     pub read_error: Option<&'a str>,
+    /// In rich mode, the HTML bodies read so far by message id; `None` in plain mode.
+    pub rich: Option<&'a HashMap<i64, Rc<RichBody>>>,
+    /// With images on, the pictures read so far by (message id, Content-ID) and the terminal
+    /// cell's size in pixels; `None` with images off.
+    pub pictures: Option<(&'a Pictures, (u16, u16))>,
 }
 
 fn line(kind: LineKind, text: String, tone: Tone) -> ReaderLine {
@@ -271,8 +310,22 @@ fn body(out: &mut Vec<ReaderLine>, index: usize, m: &MessageView, state: &State<
             );
         }
         BodyState::Text { text, cut } => {
-            text_lines(out, index, text, state, width);
-            if *cut {
+            let cut = match state.rich.and_then(|bodies| bodies.get(&m.id)) {
+                Some(body) => {
+                    let placing = state.pictures.map(|(states, font)| Placing {
+                        states,
+                        font,
+                        message_id: m.id,
+                    });
+                    rich::lines(out, index, body, state.unfolded, width, placing.as_ref());
+                    body.cut
+                }
+                None => {
+                    text_lines(out, index, text, state, width);
+                    *cut
+                }
+            };
+            if cut {
                 let note = "[Rail shows the first 500,000 characters of this message.]";
                 status(out, index, note, Tone::Muted, width);
             }
@@ -287,15 +340,20 @@ fn text_lines(
     state: &State<'_>,
     width: usize,
 ) {
+    let mut at = 0;
     for (block_index, block) in blocks(text).into_iter().enumerate() {
+        let from = out.len();
         match block {
             Block::Line(raw) => {
                 for row in wrap(&escape(&expand_tabs(raw)), width) {
                     out.push(line(LineKind::Body { message: index }, row, Tone::Plain));
                 }
+                tag(&mut out[from..], at, at + 1);
+                at += 1;
             }
             Block::Quote(rows) if state.unfolded.contains(&(index, block_index)) => {
                 for raw in rows {
+                    let from = out.len();
                     for row in wrap(&escape(&expand_tabs(raw)), width) {
                         let kind = LineKind::Quote {
                             message: index,
@@ -303,6 +361,8 @@ fn text_lines(
                         };
                         out.push(line(kind, row, Tone::Quote));
                     }
+                    tag(&mut out[from..], at, at + 1);
+                    at += 1;
                 }
             }
             Block::Quote(rows) => {
@@ -311,6 +371,8 @@ fn text_lines(
                     block: block_index,
                 };
                 out.push(line(kind, fit(&fold_label(rows.len()), width), Tone::Muted));
+                tag(&mut out[from..], at, at + rows.len());
+                at += rows.len();
             }
         }
     }

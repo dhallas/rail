@@ -12,6 +12,7 @@ use super::actions::{
     ActionApplyRequest, ActionApplyResponse, ActionRetryRequest, ActionRetryResponse,
     ActionUndoRequest, ActionUndoResponse,
 };
+use super::attachment_image::{AttachmentImageRequest, AttachmentImageResponse};
 use super::attachments::{
     AttachmentOpenRequest, AttachmentOpenResponse, AttachmentSaveRequest, AttachmentSaveResponse,
 };
@@ -71,9 +72,10 @@ pub mod names {
     pub const ATTACHMENT_OPEN: &str = "attachment.open";
     pub const SAVED_SEARCH_PUT: &str = "saved_search.put";
     pub const SAVED_SEARCH_REMOVE: &str = "saved_search.remove";
+    pub const ATTACHMENT_IMAGE: &str = "attachment.image";
 
     /// Every user operation, in the order of the specs' tables.
-    pub const ALL: [&str; 30] = [
+    pub const ALL: [&str; 31] = [
         STATUS,
         ACCOUNTS_LIST,
         PRESETS_LIST,
@@ -104,6 +106,7 @@ pub mod names {
         ATTACHMENT_OPEN,
         SAVED_SEARCH_PUT,
         SAVED_SEARCH_REMOVE,
+        ATTACHMENT_IMAGE,
     ];
 
     /// The daemon's own methods: the handshake and its lifecycle. Not user operations.
@@ -248,6 +251,11 @@ operation!(
     /// Write one attachment into a private cache directory for the system opener; answers its
     /// path, never bytes. Terminal-only.
     AttachmentOpen, names::ATTACHMENT_OPEN, AttachmentOpenRequest, AttachmentOpenResponse
+);
+operation!(
+    /// Write one inline picture into Rail's image cache for the reader; answers its path,
+    /// never bytes. Terminal-only.
+    AttachmentImage, names::ATTACHMENT_IMAGE, AttachmentImageRequest, AttachmentImageResponse
 );
 operation!(
     /// Save a search, or rename one, in `config.toml`; answers the whole new list.

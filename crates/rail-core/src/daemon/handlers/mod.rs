@@ -1,6 +1,7 @@
 //! Every operation the daemon serves.
 
 mod actions;
+mod attachment_image;
 pub(super) mod attachments;
 #[cfg(all(test, target_os = "macos"))]
 mod attachments_quarantine_tests;
@@ -58,6 +59,7 @@ pub(crate) fn registry() -> Registry {
     registry.register::<op::SnoozeClear, _, _>(snooze::clear);
     registry.register::<op::AttachmentSave, _, _>(attachments::save);
     registry.register::<op::AttachmentOpen, _, _>(attachments::open);
+    registry.register::<op::AttachmentImage, _, _>(attachment_image::image);
     registry.register::<op::SavedSearchPut, _, _>(saved::put);
     registry.register::<op::SavedSearchRemove, _, _>(saved::remove);
     registry

@@ -538,6 +538,8 @@ impl MailScreen {
             MailEvent::SearchCountsSaved { result } => {
                 self.setting_saved("saved-search counts setting", result)
             }
+            MailEvent::RichHtmlSaved { result } => self.setting_saved("HTML mail setting", result),
+            MailEvent::ImagesSaved { result } => self.setting_saved("images setting", result),
             MailEvent::TimeSaved { result } => self.setting_saved("time setting", result),
             MailEvent::ThreadOrderSaved { result } => self.setting_saved("thread order", result),
             MailEvent::DimReadSaved { result } => {

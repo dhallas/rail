@@ -142,6 +142,11 @@ impl Paths {
         self.cache_dir.join("attachments")
     }
 
+    /// The inline pictures `attachment.image` fetched for the reader, kept for a week.
+    pub fn images_dir(&self) -> PathBuf {
+        self.cache_dir.join("images")
+    }
+
     /// The attachments imported Gmail drafts own: one private directory per import, named by
     /// its client token. Data, not cache: a draft's files must outlive a cache clean.
     pub fn draft_files_dir(&self) -> PathBuf {

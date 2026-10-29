@@ -91,6 +91,7 @@ async fn screen_with(icons: Icons, hints: bool) -> (tempfile::TempDir, MailScree
             mime_type: "application/pdf".into(),
             size: 2048,
             plain_file: true,
+            content_id: None,
         }],
         ..Body::default()
     };

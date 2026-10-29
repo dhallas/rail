@@ -21,6 +21,19 @@
 //!
 //! The text is never longer than the HTML: the shortest anchor Rail numbers, `<a href=http:>`,
 //! is 14 bytes and its marker at most `[200]`, 5 bytes.
+//!
+//! For the reader, `html_styled` gives the same text in runs of one style each: strong
+//! (`b`, `strong`, `h1`-`h6`), emphasised (`i`, `em`), quoted (`blockquote`) and linked (a
+//! numbered link's text and marker). Each style is a saturating count of open tags, not a
+//! stack, so stray or missing end tags cost nothing; line breaks carry no style. Beside the
+//! runs it lists the `<img>` tags it met (`image`), each standing before the run that follows
+//! it; the text does not change.
+
+mod image;
+mod styled;
+
+pub use image::{Image, MAX_ALT_CHARS, MAX_IMAGES};
+pub use styled::{Run, Style, Styled, html_styled};
 
 use crate::provider::links::{MAX_LINK_BYTES, Numbering, Rendered};
 
@@ -62,6 +75,9 @@ const BLOCK: &[&[u8]] = &[
     b"footer",
 ];
 const CELL: &[&[u8]] = &[b"td", b"th"];
+const STRONG: &[&[u8]] = &[b"b", b"strong", b"h1", b"h2", b"h3", b"h4", b"h5", b"h6"];
+const EMPHASIS: &[&[u8]] = &[b"i", b"em"];
+const QUOTE: &[&[u8]] = &[b"blockquote"];
 /// Elements whose content is dropped up to their own end tag.
 const HIDDEN: &[&[u8]] = &[
     b"script",
@@ -154,8 +170,26 @@ const ENTITIES: &[(&[u8], char)] = &[
     (b"Uuml", 'Ü'),
 ];
 
+/// What one scan wrote: the text, its links, and, for a styled scan, where each run starts and
+/// where each image stood in the text.
+struct Scanned {
+    out: Vec<u8>,
+    links: Vec<String>,
+    starts: Vec<(usize, Style)>,
+    images: Vec<(usize, Image)>,
+}
+
 /// `html` as plain text with link markers, and the addresses they stand for.
 pub(crate) fn html_render(html: &str) -> Rendered {
+    let Scanned { out, links, .. } = scan(html, false);
+    // Only whole UTF-8 sequences of the input and whole encoded characters are written.
+    let text = String::from_utf8(out)
+        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+    Rendered { text, links }
+}
+
+/// One scan of `html`; runs and images only when `styled`.
+fn scan(html: &str, styled: bool) -> Scanned {
     let mut scanner = Scanner {
         bytes: html.as_bytes(),
         out: Vec::with_capacity(html.len().min(1 << 20)),
@@ -163,18 +197,24 @@ pub(crate) fn html_render(html: &str) -> Rendered {
         newlines: 0,
         links: Numbering::default(),
         open: None,
+        counts: Counts::default(),
+        starts: styled.then(Vec::new),
+        split: false,
+        images: Vec::new(),
     };
     scanner.run();
     scanner.close_link();
     while scanner.out.last() == Some(&b'\n') {
         scanner.out.pop();
     }
-    // Only whole UTF-8 sequences of the input and whole encoded characters are written.
-    let text = String::from_utf8(scanner.out)
-        .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
-    Rendered {
-        text,
+    let len = scanner.out.len();
+    let mut starts = scanner.starts.unwrap_or_default();
+    starts.retain(|&(start, _)| start < len);
+    Scanned {
+        out: scanner.out,
         links: scanner.links.into_links(),
+        starts,
+        images: scanner.images,
     }
 }
 
@@ -210,6 +250,34 @@ impl Name {
     }
 }
 
+/// Open tags of each style, saturating: stray end tags stop at zero.
+#[derive(Default)]
+struct Counts {
+    strong: u8,
+    emphasis: u8,
+    quote: u8,
+}
+
+impl Counts {
+    /// Count the start or end tag `name`.
+    fn tag(&mut self, name: &Name, closing: bool) {
+        let count = if name.is_in(STRONG) {
+            &mut self.strong
+        } else if name.is_in(EMPHASIS) {
+            &mut self.emphasis
+        } else if name.is_in(QUOTE) {
+            &mut self.quote
+        } else {
+            return;
+        };
+        *count = if closing {
+            count.saturating_sub(1)
+        } else {
+            count.saturating_add(1)
+        };
+    }
+}
+
 struct Scanner<'a> {
     bytes: &'a [u8],
     out: Vec<u8>,
@@ -221,6 +289,13 @@ struct Scanner<'a> {
     links: Numbering,
     /// The number of the `<a>` still open, whose marker goes after its text.
     open: Option<usize>,
+    counts: Counts,
+    /// Where each run of one style starts in `out`; `None` when only the text is wanted.
+    starts: Option<Vec<(usize, Style)>>,
+    /// An image was met since the last run started: the next run starts afresh.
+    split: bool,
+    /// The images met (styled scans only), each with where it stood in `out`.
+    images: Vec<(usize, Image)>,
 }
 
 impl Scanner<'_> {
@@ -250,16 +325,62 @@ impl Scanner<'_> {
     }
 
     fn visible(&mut self, start: usize, end: usize) {
-        self.flush_space();
+        self.begin(self.style());
         self.out.extend_from_slice(&self.bytes[start..end]);
         self.newlines = 0;
     }
 
-    fn flush_space(&mut self) {
+    /// The style of text written now.
+    fn style(&self) -> Style {
+        Style {
+            strong: self.counts.strong > 0,
+            emphasis: self.counts.emphasis > 0,
+            link: self.open.is_some(),
+            quote: self.counts.quote > 0,
+        }
+    }
+
+    /// Start a run at the end of `out` when `style` differs from the last one.
+    fn mark(&mut self, style: Style) {
+        if let Some(starts) = &mut self.starts
+            && (self.split || starts.last().is_none_or(|&(_, last)| last != style))
+        {
+            starts.push((self.out.len(), style));
+            self.split = false;
+        }
+    }
+
+    /// An `<img>` whose attributes are `bytes[from..end]`, in a styled scan, up to
+    /// `MAX_IMAGES`.
+    fn image(&mut self, from: usize, end: usize) {
+        if self.starts.is_none() || self.images.len() >= MAX_IMAGES {
+            return;
+        }
+        if let Some(image) = image::read(&self.bytes[from.min(end)..end]) {
+            self.images.push((self.out.len(), image));
+            self.split = true;
+        }
+    }
+
+    /// Before text in `style`: the pending space, in the styles shared by the text on both
+    /// sides of it, then a run for `style`.
+    fn begin(&mut self, style: Style) {
         if self.space && !self.out.is_empty() && self.newlines == 0 {
+            let before = self
+                .starts
+                .as_ref()
+                .and_then(|s| s.last())
+                .map_or(Style::PLAIN, |&(_, last)| last);
+            self.mark(Style {
+                strong: before.strong && style.strong,
+                emphasis: before.emphasis && style.emphasis,
+                link: before.link && style.link,
+                quote: before.quote && style.quote,
+            });
             self.out.push(b' ');
         }
         self.space = false;
+        self.mark(style);
     }
 
     fn push_char(&mut self, c: char) {
@@ -267,7 +388,7 @@ impl Scanner<'_> {
             self.space = true;
             return;
         }
-        self.flush_space();
+        self.begin(self.style());
         let mut buf = [0u8; 4];
         self.out
             .extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
@@ -277,6 +398,7 @@ impl Scanner<'_> {
     fn newline(&mut self) {
         self.space = false;
         if !self.out.is_empty() && self.newlines < MAX_NEWLINES {
+            self.mark(Style::PLAIN);
             self.out.push(b'\n');
             self.newlines += 1;
         }
@@ -287,13 +409,18 @@ impl Scanner<'_> {
     fn open_link(&mut self, from: usize, end: usize) {
         self.close_link();
         let attributes = &self.bytes[from.min(end)..end];
-        self.open = href(attributes).and_then(|address| self.links.number(&address));
+        self.open = attribute(attributes, b"href")
+            .and_then(decode_value)
+            .and_then(|address| self.links.number(&address));
     }
 
     /// The marker of the open `<a>`, if it has one.
     fn close_link(&mut self) {
         if let Some(number) = self.open.take() {
-            self.flush_space();
+            self.begin(Style {
+                link: true,
+                ..self.style()
+            });
             self.out.extend_from_slice(format!("[{number}]").as_bytes());
             self.newlines = 0;
         }
@@ -316,6 +443,10 @@ impl Scanner<'_> {
         }
         let (name, after_name) = self.name(name_at, at);
         let end = self.tag_end(after_name, at);
+        if !closing && name.get() == Some(b"img".as_slice()) {
+            self.image(after_name, end);
+            return end;
+        }
         if name.get() == Some(b"a".as_slice()) {
             if closing {
                 self.close_link();
@@ -324,6 +455,7 @@ impl Scanner<'_> {
             }
             return end;
         }
+        self.counts.tag(&name, closing);
         if name.is_in(BLOCK) {
             self.newline();
         } else if name.is_in(CELL) {
@@ -476,10 +608,10 @@ impl Scanner<'_> {
     }
 }
 
-/// The `href` value among `attributes` (from the end of the tag name to the end of the tag),
-/// character references decoded and white space trimmed. Quotes of other attributes are
-/// honoured, so `title="href=x"` is not an `href`.
-fn href(attributes: &[u8]) -> Option<String> {
+/// The value of attribute `wanted` (lower case) among `attributes` (from the end of the tag
+/// name to the end of the tag), as written. Quotes of other attributes are honoured, so
+/// `title="href=x"` is not an `href`.
+fn attribute<'a>(attributes: &'a [u8], wanted: &[u8]) -> Option<&'a [u8]> {
     let mut at = 0;
     while at < attributes.len() {
         while attributes
@@ -508,8 +640,8 @@ fn href(attributes: &[u8]) -> Option<String> {
             at += 1;
         }
         let (value, next) = attribute_value(attributes, at);
-        if name.eq_ignore_ascii_case(b"href") {
-            return decode_value(value);
+        if name.eq_ignore_ascii_case(wanted) {
+            return Some(value);
         }
         at = next;
     }

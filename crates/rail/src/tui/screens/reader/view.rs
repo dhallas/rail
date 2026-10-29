@@ -3,6 +3,7 @@
 //! line highlighted, and (where the terminal supports them) the link markers as OSC 8
 //! hyperlinks.
 
+use std::collections::HashSet;
 use std::num::NonZeroU16;
 
 use ratatui::Frame;
@@ -11,6 +12,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use ratatui_image::sliced::{SignedPosition, SlicedImage};
 
 use super::{LineKind, Reader, ReaderLine, Tone};
 use crate::tui::screens::mail::visible_offset;
@@ -28,7 +30,28 @@ fn style(tone: Tone, theme: &Theme, badge: Color) -> Style {
         Tone::Accent => theme.accent.add_modifier(Modifier::BOLD),
         Tone::Badge => Style::new().fg(Color::Black).bg(badge),
         Tone::Number => number(theme),
+        Tone::Rich(look) => rich(look, theme),
     }
+}
+
+/// An HTML body's stretch: quoted text as a plain body's quotes, then bold, italic and
+/// underlined (a link) on top.
+fn rich(look: rail_core::provider::html::Style, theme: &Theme) -> Style {
+    let mut style = if look.quote {
+        theme.muted.add_modifier(Modifier::ITALIC)
+    } else {
+        theme.text
+    };
+    for (on, modifier) in [
+        (look.strong, Modifier::BOLD),
+        (look.emphasis, Modifier::ITALIC),
+        (look.link, Modifier::UNDERLINED),
+    ] {
+        if on {
+            style = style.add_modifier(modifier);
+        }
+    }
+    style
 }
 
 /// A card number's box: the theme's text colour on its border colour (a grey box in the
@@ -84,8 +107,43 @@ impl Reader {
             .map(|(index, line)| styled(line, theme, badge, focused && index == self.cursor))
             .collect();
         frame.render_widget(Paragraph::new(shown), area);
+        self.draw_pictures(frame, area, &lines, scroll);
         if hyperlinks {
             self.link_cells(frame.buffer_mut(), area, &lines[scroll.min(lines.len())..]);
+        }
+    }
+
+    /// Each picture with a row in view, once, over the rows its lines keep for it: from above
+    /// the area when its top has scrolled away, so only its visible slices are drawn.
+    fn draw_pictures(&self, frame: &mut Frame, area: Rect, lines: &[ReaderLine], scroll: usize) {
+        let mut drawn = HashSet::new();
+        let visible = lines
+            .iter()
+            .enumerate()
+            .skip(scroll)
+            .take(usize::from(area.height));
+        for (index, line) in visible {
+            let LineKind::Picture {
+                message,
+                picture,
+                row,
+                cols,
+                rows,
+            } = line.kind
+            else {
+                continue;
+            };
+            if !drawn.insert((message, picture)) {
+                continue;
+            }
+            let Some(encoded) = self.protocol(message, picture, cols, rows) else {
+                continue;
+            };
+            let top = i64::try_from(index - scroll).unwrap_or(i64::MAX) - i64::from(row);
+            let Ok(y) = i16::try_from(top) else {
+                continue;
+            };
+            frame.render_widget(SlicedImage::new(&encoded, SignedPosition { x: 0, y }), area);
         }
     }
 
@@ -179,6 +237,32 @@ mod tests {
         assert_eq!(cursor.style, theme.selected);
         let text: String = cursor.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(text, "xxxxxxxx");
+    }
+
+    #[test]
+    fn an_html_stretch_is_bold_italic_or_underlined_over_the_body_or_quote_style() {
+        use rail_core::provider::html::Style as Look;
+        let theme = Theme::default();
+        let strong_link = Look {
+            strong: true,
+            link: true,
+            ..Look::PLAIN
+        };
+        assert_eq!(
+            style(Tone::Rich(strong_link), &theme, Color::Yellow),
+            theme
+                .text
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+        );
+        let quoted = Look {
+            quote: true,
+            emphasis: true,
+            ..Look::PLAIN
+        };
+        assert_eq!(
+            style(Tone::Rich(quoted), &theme, Color::Yellow),
+            theme.muted.add_modifier(Modifier::ITALIC)
+        );
     }
 
     #[test]

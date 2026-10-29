@@ -30,7 +30,7 @@ use crate::paths::{Paths, canonical_dir, create_private_dir};
 /// finds the archive a first try made; a snooze already held only takes the time again),
 /// `snooze.clear` (a thread back already is left alone), `action.undo`, `action.retry` and
 /// `draft.discard`.
-const RETRY_SAFE: [&str; 22] = [
+const RETRY_SAFE: [&str; 23] = [
     names::STATUS,
     names::ACCOUNTS_LIST,
     names::PRESETS_LIST,
@@ -53,6 +53,8 @@ const RETRY_SAFE: [&str; 22] = [
     names::DRAFT_IMPORT,
     names::SNOOZE_SET,
     names::SNOOZE_CLEAR,
+    // A read that caches: fetching the same picture again changes nothing.
+    names::ATTACHMENT_IMAGE,
 ];
 
 /// True when `operation` may be sent again on a fresh connection.

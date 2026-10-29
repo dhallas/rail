@@ -3,8 +3,10 @@
 //! HTML through `provider::html`, text as it is, both cut at `MAX_BODY_BYTES`). With
 //! `hasAttachments`, the attachment list comes with it, inline ones included, as Gmail lists
 //! every named part; each says whether it is a plain file (`reconcile::plain_file`), the only
-//! kind a forward carries and an import fetches. Graph says `hasAttachments` is false when
-//! every attachment is inline, and then none is listed.
+//! kind a forward carries and an import fetches, and its Content-ID. Graph says
+//! `hasAttachments` is false when every attachment is inline: the list is then read only when
+//! the HTML names a `cid:` image (in any case). A list Graph refuses leaves the body readable
+//! and says its attachments are unknown, so the ones already stored are kept.
 
 use super::reconcile::plain_file;
 use super::wire::{AttachmentWire, BodyWire, Page};
@@ -12,6 +14,7 @@ use super::{COST_REQUEST, GraphProvider, graph_id};
 use crate::provider::gmail::body::{Kind, render};
 use crate::provider::gmail::metadata::one_line_capped;
 use crate::provider::limits::{MAX_ATTACHMENTS, MAX_FILENAME_CHARS};
+use crate::provider::types::content_id;
 use crate::provider::{AttachmentMeta, Body, ProviderError};
 
 /// The preference that asks for the HTML body.
@@ -36,8 +39,16 @@ fn meta(wire: AttachmentWire) -> AttachmentMeta {
         mime_type: one_line_capped(&mime, MAX_MIME_CHARS),
         size: wire.size.unwrap_or(0).max(0),
         plain_file: plain_file(wire.odata_type.as_deref(), wire.is_inline),
+        content_id: wire.content_id.as_deref().and_then(content_id),
         part_id: wire.id,
     }
+}
+
+/// Whether HTML names a `cid:` image, in any case (`CID:` is the same scheme).
+fn names_cid(html: &str) -> bool {
+    html.as_bytes()
+        .windows(4)
+        .any(|w| w.eq_ignore_ascii_case(b"cid:"))
 }
 
 impl GraphProvider {
@@ -54,24 +65,57 @@ impl GraphProvider {
         if wire.id.as_deref() != Some(id) {
             return Err(unreadable());
         }
-        let attachments = match wire.has_attachments {
-            Some(true) => self.attachment_list(id).await?,
-            _ => Vec::new(),
-        };
         let body = wire.body.unwrap_or_default();
         let kind = match body.content_type.as_deref() {
             Some(text) if text.eq_ignore_ascii_case("text") => Kind::Plain,
             _ => Kind::Html,
         };
         let content = body.content.unwrap_or_default();
-        tokio::task::spawn_blocking(move || render(kind, content.as_bytes(), None, attachments))
-            .await
-            .map_err(|_| unreadable())?
+        // Graph says `hasAttachments` is false when every attachment is inline, so HTML that
+        // names a `cid:` image is listed anyway.
+        let wanted =
+            wire.has_attachments == Some(true) || (kind == Kind::Html && names_cid(&content));
+        let listed = if wanted {
+            self.listed_if_allowed(id).await?
+        } else {
+            Some(Vec::new())
+        };
+        let unknown = listed.is_none();
+        let attachments = listed.unwrap_or_default();
+        let mut body = tokio::task::spawn_blocking(move || {
+            render(kind, content.as_bytes(), None, attachments)
+        })
+        .await
+        .map_err(|_| unreadable())??;
+        body.attachments_unknown = unknown;
+        Ok(body)
+    }
+
+    /// The attachment list, or `None` when Graph refuses it. The body is readable without it:
+    /// a refused listing must not cost it, nor the attachments already stored. Anything a
+    /// retry may fix (or a login) still fails the fetch, to be tried again.
+    async fn listed_if_allowed(
+        &self,
+        id: &str,
+    ) -> Result<Option<Vec<AttachmentMeta>>, ProviderError> {
+        match self.attachment_list(id).await {
+            Err(error @ ProviderError::Permanent { .. }) => {
+                tracing::warn!(class = ?error.class(), detail = ?error.detail(), "the attachment list was refused; the body is kept without it");
+                Ok(None)
+            }
+            listed => listed.map(Some),
+        }
     }
 
     async fn attachment_list(&self, id: &str) -> Result<Vec<AttachmentMeta>, ProviderError> {
         let query = [
-            ("$select", "id,name,contentType,size,isInline".to_string()),
+            // `contentId` is a file attachment's own property: Graph refuses it on the base
+            // attachment type (HTTP 400), so it is asked for through a type cast.
+            (
+                "$select",
+                "id,name,contentType,size,isInline,microsoft.graph.fileAttachment/contentId"
+                    .to_string(),
+            ),
             ("$top", MAX_ATTACHMENTS.to_string()),
         ];
         let path = format!("me/messages/{id}/attachments");

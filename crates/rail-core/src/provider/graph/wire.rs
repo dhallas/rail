@@ -134,4 +134,6 @@ pub(crate) struct AttachmentWire {
     pub is_inline: bool,
     #[serde(rename = "@odata.type")]
     pub odata_type: Option<String>,
+    #[serde(rename = "contentId", default)]
+    pub content_id: Option<String>,
 }

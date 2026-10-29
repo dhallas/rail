@@ -4,7 +4,11 @@
 pub mod error;
 pub mod gmail;
 pub mod graph;
-pub(crate) mod html;
+pub mod html;
+#[cfg(test)]
+mod html_image_tests;
+#[cfg(test)]
+mod html_style_tests;
 #[cfg(test)]
 mod html_tests;
 pub mod http;

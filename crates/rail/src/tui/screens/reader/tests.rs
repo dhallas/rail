@@ -29,9 +29,17 @@ use crate::tui::theme::Theme;
 mod cards;
 mod links;
 mod open;
+mod pictures;
+mod rich;
 mod state;
 
 const BODY: &str = "Hi Dana,\n\nThe plan is in the doc[1]; notes are on the wiki[2].\n\n> On Tue, Tom wrote:\n> one\n> two\n> three\n> four\n\nThanks,\nTom";
+/// m1's HTML part: Rail's scanner reads it as `BODY`, as it would have when the body was
+/// stored.
+const HTML: &str = "<p>Hi Dana,</p><p>The plan is in the <a href=\"https://docs.example/plan\">\
+                    doc</a>; notes are on the <a href=\"https://wiki.example/notes\">wiki</a>.\
+                    </p><p>&gt; On Tue, Tom wrote:<br>&gt; one<br>&gt; two<br>&gt; three<br>\
+                    &gt; four</p><p>Thanks,<br>Tom</p>";
 
 struct Fixture {
     _tmp: tempfile::TempDir,
@@ -74,7 +82,7 @@ async fn fixture_with(hyperlinks: bool, icons: Icons) -> Fixture {
     );
     let body = Body {
         text: BODY.into(),
-        html: Some("<p>Hi Dana</p>".into()),
+        html: Some(HTML.into()),
         links: vec![
             "https://docs.example/plan".into(),
             "https://wiki.example/notes".into(),
@@ -85,6 +93,7 @@ async fn fixture_with(hyperlinks: bool, icons: Icons) -> Fixture {
             mime_type: "application/pdf".into(),
             size: 2_048,
             plain_file: true,
+            content_id: None,
         }],
         ..Body::default()
     };

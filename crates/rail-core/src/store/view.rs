@@ -557,6 +557,37 @@ impl Store {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
+    /// The part of that account's message whose Content-ID is `content_id`, the first in
+    /// `attachments.id` order; `None` when the store lists none.
+    ///
+    /// # Errors
+    /// The store could not be read.
+    pub fn inline_part(
+        &self,
+        account_id: i64,
+        remote: &str,
+        content_id: &str,
+    ) -> Result<Option<AttachmentView>, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT a.remote_part_id, a.filename, a.mime_type, a.size
+                 FROM attachments a JOIN messages m ON m.id = a.message_id
+                 WHERE m.account_id = ?1 AND m.remote_id = ?2 AND a.content_id = ?3
+                 ORDER BY a.id LIMIT 1",
+                params![account_id, remote, content_id],
+                |r| {
+                    Ok(AttachmentView {
+                        part_id: r.get(0)?,
+                        filename: r.get(1)?,
+                        mime_type: r.get(2)?,
+                        size: r.get(3)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
     fn attach(&self, messages: &mut [MessageView]) -> Result<(), StoreError> {
         let ids: Vec<i64> = messages.iter().map(|m| m.id).collect();
         let mut stmt = self.conn.prepare(

@@ -11,6 +11,12 @@ mod keys_tests;
 mod lines;
 #[cfg(test)]
 mod lines_tests;
+mod pictures;
+#[cfg(test)]
+mod pictures_tests;
+mod rich;
+#[cfg(test)]
+mod rich_tests;
 #[cfg(test)]
 mod test_threads;
 #[cfg(test)]
@@ -27,6 +33,8 @@ use rail_core::store::view::{BodyState, MessageView, ThreadDetail};
 use ratatui::style::Color;
 
 pub use lines::{LineKind, ReaderLine, Tone};
+pub use pictures::{DecodedPicture, decode as decode_picture};
+pub use rich::{RichBody, from_html};
 
 use crate::tui::clock::Clock;
 use crate::tui::keys::Action;
@@ -107,6 +115,20 @@ pub struct Reader {
     asked: HashSet<i64>,
     /// Escaped error text per message id.
     errors: HashMap<i64, String>,
+    /// HTML bodies drawn with their styles (`rich_html`, `:rich-html`); off, every body is
+    /// the plain text.
+    rich: bool,
+    /// The HTML bodies read so far, by message id.
+    rich_bodies: HashMap<i64, Rc<RichBody>>,
+    /// Message ids whose HTML was asked for: never asked twice while the reader is open. One
+    /// with no HTML, or whose read failed, stays plain.
+    rich_asked: HashSet<i64>,
+    /// With images on (`images`, `:images`), what draws them; `None` with images off.
+    picker: Option<ratatui_image::picker::Picker>,
+    /// The pictures asked for or read, by (message id, Content-ID).
+    pictures: pictures::Pictures,
+    /// Each drawn picture encoded for the terminal at its last size, by (message id, Content-ID).
+    protocols: RefCell<pictures::Protocols>,
     /// The last re-read failed: the subject line shows this (escaped) until a read succeeds.
     read_error: Option<String>,
     cursor: usize,
@@ -156,6 +178,12 @@ impl Reader {
             fetching: HashSet::new(),
             asked: HashSet::new(),
             errors: HashMap::new(),
+            rich: false,
+            rich_bodies: HashMap::new(),
+            rich_asked: HashSet::new(),
+            picker: None,
+            pictures: HashMap::new(),
+            protocols: RefCell::new(HashMap::new()),
             read_error: None,
             cursor: 0,
             scroll: 0,
@@ -170,6 +198,94 @@ impl Reader {
     pub fn with_unread(mut self, ids: HashSet<i64>) -> Self {
         self.unread_at_open = ids;
         self
+    }
+
+    /// The reader with HTML bodies drawn rich (`on`) or plain.
+    pub fn with_rich(mut self, on: bool) -> Self {
+        self.rich = on;
+        self
+    }
+
+    /// HTML bodies drawn rich (`on`) or plain from now on (`:rich-html`); the cursor goes to the
+    /// start of the message it was in, since the lines change under it.
+    pub fn set_rich(&mut self, on: bool) {
+        if on == self.rich {
+            return;
+        }
+        let message = self.message_near();
+        self.rich = on;
+        self.changed();
+        self.land(message);
+        self.scroll =
+            crate::tui::screens::mail::visible_offset(self.scroll, self.cursor, self.page());
+    }
+
+    /// In rich mode, the open messages whose HTML part is stored and not asked for yet.
+    pub fn rich_wanted(&self) -> Vec<i64> {
+        if !self.rich {
+            return Vec::new();
+        }
+        self.detail
+            .messages
+            .iter()
+            .zip(&self.expanded)
+            .filter(|(m, open)| **open && m.has_html && matches!(m.body, BodyState::Text { .. }))
+            .map(|(m, _)| m.id)
+            .filter(|id| !self.rich_asked.contains(id))
+            .collect()
+    }
+
+    pub fn mark_rich_asked(&mut self, ids: &[i64]) {
+        self.rich_asked.extend(ids.iter().copied());
+    }
+
+    /// The HTML of message `id` read for rich mode; `None` (no HTML part, or the read failed)
+    /// leaves it plain. The cursor stays on its line of the stored text (or the fold that now
+    /// hides it): a fold rich mode draws where the plain text had none moves the lines under it.
+    pub fn rich_read(&mut self, id: i64, body: Option<RichBody>) {
+        let Some(mut body) = body else { return };
+        let stored = self.detail.messages.iter().find(|m| m.id == id);
+        if let Some(BodyState::Text { text, .. }) = stored.map(|m| &m.body) {
+            body = body.noting_cut(text);
+        }
+        let (line, anchor) = (self.line_anchor(), self.anchor());
+        self.rich_bodies.insert(id, Rc::new(body));
+        self.changed();
+        match line.and_then(|line| self.find_line(&line)) {
+            Some(at) => self.cursor = at,
+            None => self.restore(anchor),
+        }
+        self.scroll =
+            crate::tui::screens::mail::visible_offset(self.scroll, self.cursor, self.page());
+    }
+
+    /// The cursor's place in its message's stored text: the message's index, the stored line
+    /// its body line draws, and which wrapped row of it. `None` off the body.
+    fn line_anchor(&self) -> Option<(usize, usize, usize)> {
+        let lines = self.current();
+        let line = lines.get(self.cursor)?;
+        let message = line.kind.message()?;
+        let (first, _) = line.source()?;
+        let row = lines[..self.cursor]
+            .iter()
+            .filter(|l| l.kind.message() == Some(message) && l.source() == line.source())
+            .count();
+        Some((message, first, row))
+    }
+
+    /// Where `line_anchor`'s place is drawn now: the same row of its stored line (or its
+    /// last row), or the fold that hides it.
+    fn find_line(&self, &(message, first, row): &(usize, usize, usize)) -> Option<usize> {
+        let lines = self.current();
+        let drawing: Vec<usize> = (0..lines.len())
+            .filter(|&at| lines[at].kind.message() == Some(message))
+            .filter(|&at| {
+                lines[at]
+                    .source()
+                    .is_some_and(|(a, b)| a <= first && first < b)
+            })
+            .collect();
+        drawing.get(row).or(drawing.last()).copied()
     }
 
     pub fn thread_id(&self) -> i64 {
@@ -429,6 +545,8 @@ impl Reader {
             headers: self.headers,
             order: self.order,
             read_error: self.read_error.as_deref(),
+            rich: self.rich.then_some(&self.rich_bodies),
+            pictures: self.placing(),
         };
         let built = Rc::new(cards::build(
             &self.detail,
