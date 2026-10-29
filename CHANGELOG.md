@@ -6,6 +6,8 @@ All notable changes to Rail are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-29
+
 ### Fixed
 
 - Inline pictures of mail stored before 0.4.0 show the first time the message is opened: Rail
