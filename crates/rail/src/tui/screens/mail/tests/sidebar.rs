@@ -2,6 +2,9 @@
 //! and keeping its place across re-reads.
 
 use crossterm::event::KeyCode;
+use rail_core::config::AccountKind;
+use rail_core::provider::{FolderKind, RemoteFolder};
+use rail_core::sync::Batch;
 
 use super::drafts_folder::{
     LOCAL_AT, gmail_draft, pane_subjects, recipient, seed_local, sync_drafts,
@@ -37,6 +40,30 @@ pub(super) async fn open_projects(f: &mut Fixture) {
     press(f, KeyCode::Char(' ')).await;
     press(f, KeyCode::Char('j')).await;
     press(f, KeyCode::Enter).await;
+}
+
+/// `home` made a Microsoft 365 account whose folders are Inbox, Sent Items and, under More
+/// folders, `Inbox/Some folder` and `Sent Items/Receipts`.
+async fn m365_home(f: &mut Fixture) {
+    f.screen.accounts[1].kind = AccountKind::M365;
+    let folder = |remote_id: &str, name: &str, kind| RemoteFolder {
+        parent: None,
+        remote_id: remote_id.into(),
+        name: name.into(),
+        kind,
+    };
+    let folders = vec![
+        folder("INBOX", "Inbox", FolderKind::Inbox),
+        folder("SENT", "Sent Items", FolderKind::Sent),
+        folder("some", "Inbox/Some folder", FolderKind::User),
+        folder("receipts", "Sent Items/Receipts", FolderKind::User),
+    ];
+    let batch = Batch {
+        folders: Some(folders),
+        ..Batch::new(2)
+    };
+    writer(f).apply(&batch, BASE_MS / 1000).unwrap();
+    store_changed(f).await;
 }
 
 fn rows(f: &Fixture) -> usize {
@@ -99,6 +126,47 @@ async fn enter_and_space_act_on_each_kind_of_row() {
     assert!(
         matches!(&f.screen.scope, ScopeChoice::Folder { account: 0, name, .. } if name == "Projects")
     );
+}
+
+/// On Microsoft 365 `Inbox/Some folder` sits inside the Inbox: `Enter` on its `Inbox` parent
+/// opens the Inbox, and `Space` still folds and unfolds the parent.
+#[tokio::test]
+async fn enter_on_a_microsoft_365_system_folders_parent_opens_that_folder() {
+    let mut f = fixture(3).await;
+    m365_home(&mut f).await;
+    sidebar_to(&mut f, Some(1), "More folders (2)").await;
+    press(&mut f, KeyCode::Char(' ')).await;
+    press(&mut f, KeyCode::Char('j')).await;
+    assert_eq!(here(&f), Some(("Inbox", Some(1))));
+    assert!(f.screen.sidebar.selected().is_some_and(|r| r.depth == 2));
+    let shown = rows(&f);
+    press(&mut f, KeyCode::Char(' ')).await;
+    assert_eq!(rows(&f), shown + 1, "Some folder shows");
+    press(&mut f, KeyCode::Char(' ')).await;
+    assert_eq!(rows(&f), shown, "folded again");
+    press(&mut f, KeyCode::Enter).await;
+    assert_eq!(f.screen.scope, ScopeChoice::Account(1));
+    assert_eq!(f.screen.focus, Focus::List);
+}
+
+/// Gmail label paths are names only: `Sent/2024` is not inside Sent, so `Enter` on its `Sent`
+/// parent unfolds it rather than opening Sent.
+#[tokio::test]
+async fn enter_on_a_gmail_label_path_named_like_sent_unfolds_it() {
+    let mut f = fixture(3).await;
+    writer(&f)
+        .apply(&labels(&[("Label_2", "Sent/2024")]), BASE_MS / 1000)
+        .unwrap();
+    store_changed(&mut f).await;
+    sidebar_to(&mut f, Some(0), "More folders (1)").await;
+    press(&mut f, KeyCode::Char(' ')).await;
+    press(&mut f, KeyCode::Char('j')).await;
+    assert_eq!(here(&f), Some(("Sent", Some(0))));
+    let shown = rows(&f);
+    press(&mut f, KeyCode::Enter).await;
+    assert_eq!(f.screen.scope, ScopeChoice::Unified);
+    assert_eq!(f.screen.focus, Focus::Sidebar);
+    assert_eq!(rows(&f), shown + 1, "2024 shows");
 }
 
 /// `→` and `←` are `sidebar.fold`'s other keys: on a folded More folders row `→` unfolds it and
@@ -219,6 +287,29 @@ async fn a_label_from_the_palette_unfolds_its_way_in_the_sidebar() {
         "work's More folders unfolded"
     );
     assert_eq!(f.screen.header_left(), "▍Rail │ work · Projects · 0 unread");
+}
+
+/// `Sent Items/Receipts` puts a `Sent Items` parent under More folders that opens Sent Items:
+/// the palette still lists Sent Items once.
+#[tokio::test]
+async fn the_palette_lists_a_system_folder_once_beside_its_parent_row() {
+    let mut f = fixture(3).await;
+    m365_home(&mut f).await;
+    let texts: Vec<String> = f
+        .screen
+        .palette_entries()
+        .into_iter()
+        .map(|e| e.text)
+        .filter(|t| t.starts_with("Label: home"))
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "Label: home · Sent Items",
+            "Label: home · Inbox/Some folder",
+            "Label: home · Sent Items/Receipts"
+        ]
+    );
 }
 
 /// The UNIFIED Drafts row opens one Drafts pane over every account: `home`'s local draft and

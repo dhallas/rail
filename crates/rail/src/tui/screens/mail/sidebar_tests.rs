@@ -1,17 +1,20 @@
 //! The sidebar on its own: walking it, folding, what `Enter` does on each kind of row, pointing
 //! at a scope, its counts, and keeping its place across rebuilds.
 
+use rail_core::config::AccountKind;
+
 use super::AccountEntry;
 use super::Sidebar;
 use super::sidebar_tree::fixtures::{folder, two_accounts};
 use crate::tui::data::ScopeChoice;
 use crate::tui::test_util::work_and_home;
 
-/// `work` and `home` labelled as the fixtures' accounts are.
+/// `work` and `home` labelled and of the kinds the fixtures' accounts are.
 fn accounts() -> Vec<AccountEntry> {
     let mut accounts = work_and_home();
     accounts[0].label = "Personal".into();
     accounts[1].label = "AXON".into();
+    accounts[1].kind = AccountKind::M365;
     accounts
 }
 
@@ -172,6 +175,31 @@ fn point_at_unfolds_what_hides_the_scope_and_keeps_a_row_that_already_shows_it()
         Some(("Inbox", Some(1))),
         "else the account's Inbox row"
     );
+}
+
+/// The `Inbox` parent under `More folders` opens the inbox, but the account's own Inbox row
+/// stays the one drawn as it and the one the cursor is sent to.
+#[test]
+fn a_system_folders_parent_opens_it_but_the_system_row_stays_its_row() {
+    let mut s = sidebar();
+    walk_to(&mut s, "AXON");
+    walk_to(&mut s, "More folders (5)");
+    assert_eq!(s.open(), None);
+    walk_to(&mut s, "Inbox");
+    assert_eq!(
+        s.selected().map(|r| r.depth),
+        Some(2),
+        "the parent, not the system row"
+    );
+    assert_eq!(s.open(), Some(ScopeChoice::Account(1)));
+    let inbox = s
+        .rows()
+        .iter()
+        .position(|r| r.label == "Inbox" && r.depth == 1 && r.account() == Some(1));
+    assert_eq!(s.current(&ScopeChoice::Account(1)), inbox);
+    walk_to(&mut s, "Outbox");
+    s.point_at(&ScopeChoice::Account(1));
+    assert_eq!(Some(s.cursor()), inbox);
 }
 
 #[test]

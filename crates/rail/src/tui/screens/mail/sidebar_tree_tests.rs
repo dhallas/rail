@@ -270,6 +270,42 @@ fn rows_open_their_scopes_and_keep_their_keys() {
     );
 }
 
+/// `Inbox/Infrastructure` puts an `Inbox` parent under `More folders`: `Enter` there opens the
+/// account's inbox, while the row keeps its own key and counts only what is under it.
+#[test]
+fn a_system_folders_parent_under_more_folders_opens_that_folder() {
+    let folds = unfolded(&[RowKey::More(acct(1))]);
+    let rows = build(&accounts(), &[], &two_accounts(), &folds);
+    let parent = rows
+        .iter()
+        .find(|r| r.key == prefix(1, "Inbox"))
+        .expect("the Inbox parent");
+    assert_eq!(parent.scope(), Some(ScopeChoice::Account(1)));
+    assert_eq!(
+        parent.count,
+        Some(7),
+        "folded: Infrastructure's sum, not the Inbox's"
+    );
+}
+
+/// Gmail label paths are names only: `Sent/2024` is not inside Sent, so its `Sent` parent
+/// opens nothing and unfolds on `Enter`.
+#[test]
+fn a_gmail_label_path_named_like_a_system_label_is_only_a_prefix() {
+    let mut outcome = two_accounts();
+    outcome
+        .counts
+        .folders
+        .push(folder(1, 23, "Sent/2024", "label", 1));
+    let folds = unfolded(&[RowKey::More(acct(0))]);
+    let rows = build(&accounts(), &[], &outcome, &folds);
+    let parent = rows
+        .iter()
+        .find(|r| r.key == prefix(0, "Sent"))
+        .expect("the Sent parent");
+    assert_eq!(parent.scope(), None);
+}
+
 #[test]
 fn a_folded_account_hides_everything_under_it() {
     let mut folds = Folds::default();

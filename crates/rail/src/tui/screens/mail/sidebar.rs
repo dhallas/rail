@@ -71,6 +71,7 @@ impl Sidebar {
             .map(|a| TreeAccount {
                 label: a.label.clone(),
                 address: a.address.clone(),
+                kind: a.kind,
             })
             .collect();
         self.capped = capped(accounts.len(), outcome);
@@ -102,9 +103,7 @@ impl Sidebar {
     /// The shown row drawn as `scope`'s: the last one with it (an account's Inbox row while the
     /// account is unfolded, its account row while folded).
     pub fn current(&self, scope: &ScopeChoice) -> Option<usize> {
-        self.rows
-            .iter()
-            .rposition(|r| r.scope().as_ref() == Some(scope))
+        self.rows.iter().rposition(|r| r.is_row_of(scope))
     }
 
     /// The first row to draw so row `target` shows in `height` rows; kept for the next frame.
@@ -211,7 +210,8 @@ impl Sidebar {
     }
 
     /// `Enter`: the scope to show; `None` when the row unfolds in place instead (`More
-    /// folders`, a path with no folder of its own).
+    /// folders`, a path with no folder of its own, unless on Microsoft 365 it is named after a
+    /// system folder, which it opens).
     pub fn open(&mut self) -> Option<ScopeChoice> {
         let row = self.selected()?;
         if let Some(scope) = row.scope() {
@@ -237,12 +237,7 @@ impl Sidebar {
             self.cursor = Some(self.rows[shown].key.clone());
             return;
         }
-        let Some(row) = self
-            .all
-            .iter()
-            .rev()
-            .find(|r| r.scope().as_ref() == Some(scope))
-        else {
+        let Some(row) = self.all.iter().rev().find(|r| r.is_row_of(scope)) else {
             return;
         };
         let (key, parents) = (row.key.clone(), row.parents.clone());
