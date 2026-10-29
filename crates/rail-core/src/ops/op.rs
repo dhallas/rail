@@ -31,6 +31,7 @@ use super::pending::{CancelRequest, WaitRequest, WaitResponse};
 use super::presets::{
     PresetFetchRequest, PresetFetchResponse, PresetsListRequest, PresetsListResponse,
 };
+use super::remote_image::{RemoteImageRequest, RemoteImageResponse};
 use super::saved::{SavedSearchListResponse, SavedSearchPutRequest, SavedSearchRemoveRequest};
 use super::secrets::{SecretsConfigureRequest, SecretsConfigureResponse};
 use super::snooze::{SnoozeClearRequest, SnoozeClearResponse, SnoozeSetRequest, SnoozeSetResponse};
@@ -73,9 +74,10 @@ pub mod names {
     pub const SAVED_SEARCH_PUT: &str = "saved_search.put";
     pub const SAVED_SEARCH_REMOVE: &str = "saved_search.remove";
     pub const ATTACHMENT_IMAGE: &str = "attachment.image";
+    pub const IMAGE_REMOTE: &str = "image.remote";
 
     /// Every user operation, in the order of the specs' tables.
-    pub const ALL: [&str; 31] = [
+    pub const ALL: [&str; 32] = [
         STATUS,
         ACCOUNTS_LIST,
         PRESETS_LIST,
@@ -107,6 +109,7 @@ pub mod names {
         SAVED_SEARCH_PUT,
         SAVED_SEARCH_REMOVE,
         ATTACHMENT_IMAGE,
+        IMAGE_REMOTE,
     ];
 
     /// The daemon's own methods: the handshake and its lifecycle. Not user operations.
@@ -258,6 +261,11 @@ operation!(
     /// Write one inline picture into Rail's image cache for the reader; answers its path,
     /// never bytes. Terminal-only.
     AttachmentImage, names::ATTACHMENT_IMAGE, AttachmentImageRequest, AttachmentImageResponse
+);
+operation!(
+    /// Write one picture a mail names by its web address into Rail's image cache for the
+    /// reader; answers its path, never bytes. Terminal-only.
+    ImageRemote, names::IMAGE_REMOTE, RemoteImageRequest, RemoteImageResponse
 );
 operation!(
     /// Save a search, or rename one, in `config.toml`; answers the whole new list.

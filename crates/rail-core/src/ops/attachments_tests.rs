@@ -252,7 +252,7 @@ fn openable_strips_parameters_and_ignores_case() {
 #[test]
 fn the_image_operation_is_registered_retry_safe_and_prints_nothing() {
     assert_eq!(names::ATTACHMENT_IMAGE, "attachment.image");
-    assert_eq!(names::ALL.last(), Some(&names::ATTACHMENT_IMAGE));
+    assert_eq!(names::ALL[30], names::ATTACHMENT_IMAGE);
     assert!(crate::daemon::retry_safe(names::ATTACHMENT_IMAGE));
     let request = AttachmentImageRequest {
         account: "work".into(),
@@ -269,4 +269,26 @@ fn the_image_operation_is_registered_retry_safe_and_prints_nothing() {
     }
     assert_eq!(super::image_extension(" IMAGE/JPEG "), Some("jpg"));
     assert_eq!(super::image_extension("image/svg+xml"), None);
+}
+
+/// `image.remote` follows `attachment.image`, may be resent as it may, and prints nothing of
+/// the address.
+#[test]
+fn the_remote_image_operation_is_registered_retry_safe_and_prints_nothing() {
+    assert_eq!(names::IMAGE_REMOTE, "image.remote");
+    assert_eq!(names::ALL.last(), Some(&names::IMAGE_REMOTE));
+    assert!(crate::daemon::retry_safe(names::IMAGE_REMOTE));
+    let request = super::RemoteImageRequest {
+        url: "https://track.example.com/open?to=sam".into(),
+    };
+    let printed = format!("{request:?}");
+    for mail in ["track", "example", "sam"] {
+        assert!(!printed.contains(mail), "{mail} in {printed}");
+    }
+    assert!(request.checked().is_ok());
+    let empty = super::RemoteImageRequest { url: String::new() };
+    assert_eq!(
+        empty.checked().unwrap_err().code,
+        super::ErrorCode::InvalidInput
+    );
 }

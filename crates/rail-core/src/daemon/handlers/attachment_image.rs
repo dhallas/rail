@@ -126,7 +126,7 @@ fn cache_key(account_id: i64, request: &AttachmentImageRequest) -> String {
 
 /// Sweep, then write `bytes` to a temporary 0600 file in `images_dir()` and rename it to
 /// `path`, so a reader never sees half a picture.
-fn write_cached(paths: &Paths, path: &Path, bytes: &[u8]) -> Result<(), OpError> {
+pub(super) fn write_cached(paths: &Paths, path: &Path, bytes: &[u8]) -> Result<(), OpError> {
     let dir = paths.images_dir();
     create_private_dir(&dir).map_err(|error| io_error("creating the image cache", &error))?;
     if let Err(error) = sweep(&dir, SystemTime::now()) {
@@ -146,7 +146,7 @@ fn write_cached(paths: &Paths, path: &Path, bytes: &[u8]) -> Result<(), OpError>
 /// Whether `path` is a cached picture, its modified time set to now when it is: the sweep
 /// before another picture's write then leaves it for the reader the answer names, and a picture
 /// in use is not fetched again each week. One that cannot be touched is fetched and written anew.
-fn cached(path: &Path) -> bool {
+pub(super) fn cached(path: &Path) -> bool {
     let touched = std::fs::File::open(path).and_then(|file| {
         if !file.metadata()?.is_file() {
             return Ok(false);

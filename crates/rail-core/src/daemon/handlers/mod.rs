@@ -16,6 +16,7 @@ pub(super) mod inline_refresh;
 mod login;
 mod pending;
 mod presets;
+mod remote_image;
 mod remove;
 mod saved;
 mod secrets;
@@ -61,6 +62,7 @@ pub(crate) fn registry() -> Registry {
     registry.register::<op::AttachmentSave, _, _>(attachments::save);
     registry.register::<op::AttachmentOpen, _, _>(attachments::open);
     registry.register::<op::AttachmentImage, _, _>(attachment_image::image);
+    registry.register::<op::ImageRemote, _, _>(remote_image::image);
     registry.register::<op::SavedSearchPut, _, _>(saved::put);
     registry.register::<op::SavedSearchRemove, _, _>(saved::remove);
     registry
