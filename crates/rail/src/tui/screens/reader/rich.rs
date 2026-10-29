@@ -10,7 +10,7 @@ use rail_core::provider::gmail::TRUNCATED_MARKER;
 use rail_core::provider::html::{Run, Style, html_styled};
 use rail_core::store::view::MAX_SHOWN_BODY_CHARS;
 
-use super::lines::{LineKind, ReaderLine, Tone};
+use super::lines::{LineKind, ReaderLine, Tone, tag};
 use crate::tui::text::{QUOTE_FOLD_MIN, escape, fit, fold_label, wrap};
 
 /// A message's HTML part as styled runs, cut to `MAX_SHOWN_BODY_CHARS` as the plain text is.
@@ -84,10 +84,12 @@ pub(super) fn lines(
     unfolded: &HashSet<(usize, usize)>,
     width: usize,
 ) {
+    let mut at = 0;
     for (block_index, block) in blocks(&body.runs).into_iter().enumerate() {
         match block {
             Block::Line(segments) => {
-                push_rows(out, LineKind::Body { message: index }, &segments, width);
+                push_rows(out, LineKind::Body { message: index }, &segments, width, at);
+                at += 1;
             }
             Block::Quote(rows) if unfolded.contains(&(index, block_index)) => {
                 let kind = LineKind::Quote {
@@ -107,7 +109,8 @@ pub(super) fn lines(
                             )
                         })
                         .collect();
-                    push_rows(out, kind, &quoted, width);
+                    push_rows(out, kind, &quoted, width, at);
+                    at += 1;
                 }
             }
             Block::Quote(rows) => {
@@ -117,6 +120,9 @@ pub(super) fn lines(
                 };
                 let label = fit(&fold_label(rows.len()), width);
                 out.push(ReaderLine::one(kind, label, Tone::Muted));
+                let from = out.len() - 1;
+                tag(&mut out[from..], at, at + rows.len());
+                at += rows.len();
             }
         }
     }
@@ -173,7 +179,15 @@ fn is_quoted(line: &Segments) -> bool {
 
 /// `segments` escaped and wrapped to `width`, each row keeping each character's style.
 /// `wrap` only drops spaces, so every character of a row is found, in order, in the line.
-fn push_rows(out: &mut Vec<ReaderLine>, kind: LineKind, segments: &Segments, width: usize) {
+/// The rows draw the stored text's line `source`.
+fn push_rows(
+    out: &mut Vec<ReaderLine>,
+    kind: LineKind,
+    segments: &Segments,
+    width: usize,
+    source: usize,
+) {
+    let from = out.len();
     let escaped: Vec<(String, Tone)> = segments
         .iter()
         .map(|(text, style)| (escape(text), tone(*style)))
@@ -199,6 +213,7 @@ fn push_rows(out: &mut Vec<ReaderLine>, kind: LineKind, segments: &Segments, wid
         }
         out.push(ReaderLine::of(kind, parts));
     }
+    tag(&mut out[from..], source, source + 1);
 }
 
 /// Plain text in the body's own tone, anything else in its style.

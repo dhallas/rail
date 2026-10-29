@@ -227,8 +227,8 @@ impl Reader {
     }
 
     /// The HTML of message `id` read for rich mode; `None` (no HTML part, or the read failed)
-    /// leaves it plain. The cursor stays on its line of text: a fold rich mode draws where the
-    /// plain text had none moves the lines under it.
+    /// leaves it plain. The cursor stays on its line of the stored text (or the fold that now
+    /// hides it): a fold rich mode draws where the plain text had none moves the lines under it.
     pub fn rich_read(&mut self, id: i64, body: Option<RichBody>) {
         let Some(mut body) = body else { return };
         let stored = self.detail.messages.iter().find(|m| m.id == id);
@@ -246,27 +246,33 @@ impl Reader {
             crate::tui::screens::mail::visible_offset(self.scroll, self.cursor, self.page());
     }
 
-    /// The cursor's line as text: its message's index, its text, and how many lines of that
-    /// message above it read the same.
-    fn line_anchor(&self) -> Option<(usize, String, usize)> {
+    /// The cursor's place in its message's stored text: the message's index, the stored line
+    /// its body line draws, and which wrapped row of it. `None` off the body.
+    fn line_anchor(&self) -> Option<(usize, usize, usize)> {
         let lines = self.current();
         let line = lines.get(self.cursor)?;
         let message = line.kind.message()?;
-        let same = lines[..self.cursor]
+        let (first, _) = line.source()?;
+        let row = lines[..self.cursor]
             .iter()
-            .filter(|l| l.kind.message() == Some(message) && l.text() == line.text())
+            .filter(|l| l.kind.message() == Some(message) && l.source() == line.source())
             .count();
-        Some((message, line.text().to_string(), same))
+        Some((message, first, row))
     }
 
-    /// Where `line_anchor`'s line is now, if it is still drawn.
-    fn find_line(&self, (message, text, same): &(usize, String, usize)) -> Option<usize> {
-        self.current()
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| l.kind.message() == Some(*message) && l.text() == text)
-            .nth(*same)
-            .map(|(at, _)| at)
+    /// Where `line_anchor`'s place is drawn now: the same row of its stored line (or its
+    /// last row), or the fold that hides it.
+    fn find_line(&self, &(message, first, row): &(usize, usize, usize)) -> Option<usize> {
+        let lines = self.current();
+        let drawing: Vec<usize> = (0..lines.len())
+            .filter(|&at| lines[at].kind.message() == Some(message))
+            .filter(|&at| {
+                lines[at]
+                    .source()
+                    .is_some_and(|(a, b)| a <= first && first < b)
+            })
+            .collect();
+        drawing.get(row).or(drawing.last()).copied()
     }
 
     pub fn thread_id(&self) -> i64 {
