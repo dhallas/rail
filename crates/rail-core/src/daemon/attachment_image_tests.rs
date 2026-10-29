@@ -150,3 +150,24 @@ async fn a_fetch_sweeps_pictures_cached_more_than_a_week_ago() {
     assert!(left.contains(&"recent.png".to_string()), "{left:?}");
     assert_eq!(left.len(), 2, "{left:?}");
 }
+
+#[tokio::test]
+async fn a_cached_picture_answered_again_is_not_swept_by_the_next_fetch() {
+    let (h, _dest) = fixture().await;
+    inline_part(&h, "0.2", "logo@x", "image/png", 16);
+    inline_part(&h, "0.3", "other@x", "image/png", 16);
+    bytes_at(&h, "0.2", PNG.to_vec());
+    bytes_at(&h, "0.3", PNG.to_vec());
+    let before = attachment_calls(&h);
+    let path = PathBuf::from(image(&h, "logo@x").await.unwrap().path);
+    age(&path, 8 * 86_400);
+
+    // Answered from disk, so its age starts again: the sweep before the next write keeps it.
+    assert_eq!(
+        image(&h, "logo@x").await.unwrap().path,
+        path.display().to_string()
+    );
+    image(&h, "other@x").await.unwrap();
+    assert!(path.is_file(), "{:?}", entries(&h.paths.images_dir()));
+    assert_eq!(attachment_calls(&h), before + 2, "the hit was not fetched");
+}

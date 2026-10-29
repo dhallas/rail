@@ -4,14 +4,15 @@
 //! part, its type is not one the reader draws or its listed size is over the cap; refused
 //! after it when the bytes are over the cap or lack their type's signature, and nothing is
 //! written then. Each write is a temporary file renamed into place, after a sweep of pictures
-//! older than `IMAGE_STALE_AFTER`. Logs carry error kinds only.
+//! older than `IMAGE_STALE_AFTER`; a copy answered from disk has its age started again first.
+//! Logs carry error kinds only.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::SystemTime;
 
 use sha2::{Digest, Sha256};
 
-use super::attachments::{create_new_private, write_synced};
+use super::attachments::{create_new_private, sweep_token, write_synced};
 use crate::auth::random_token;
 use crate::daemon::DaemonContext;
 use crate::daemon::registry::Call;
@@ -50,7 +51,8 @@ pub(super) async fn image(
         path: path.display().to_string(),
         mime_type: part.mime_type.to_ascii_lowercase(),
     };
-    if path.is_file() {
+    let hit = path.clone();
+    if call.ctx.blocking(move || Ok(cached(&hit))).await? {
         return Ok(response(&path));
     }
     // As an open's fetch: one short retry, because a person is waiting.
@@ -128,26 +130,35 @@ fn write_cached(paths: &Paths, path: &Path, bytes: &[u8]) -> Result<(), OpError>
     Ok(())
 }
 
-/// Remove every regular file directly in `dir` last changed before `now - IMAGE_STALE_AFTER`;
-/// how many went. A symlink or a directory is never followed or removed.
-fn sweep(dir: &Path, now: SystemTime) -> std::io::Result<usize> {
-    let Some(cutoff) = now.checked_sub(IMAGE_STALE_AFTER) else {
-        return Ok(0);
-    };
-    let mut removed = 0;
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let meta = entry.metadata()?;
-        if meta.file_type().is_file() && meta.modified()? < cutoff {
-            let path: PathBuf = entry.path();
-            match std::fs::remove_file(&path) {
-                Ok(()) => removed += 1,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error),
-            }
+/// Whether `path` is a cached picture, its modified time set to now when it is: the sweep
+/// before another picture's write then leaves it for the reader the answer names, and a picture
+/// in use is not fetched again each week. One that cannot be touched is fetched and written anew.
+fn cached(path: &Path) -> bool {
+    let touched = std::fs::File::open(path).and_then(|file| {
+        if !file.metadata()?.is_file() {
+            return Ok(false);
+        }
+        file.set_modified(SystemTime::now()).map(|()| true)
+    });
+    match touched {
+        Ok(hit) => hit,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            tracing::warn!(kind = ?error.kind(), "a cached picture's age was not refreshed");
+            false
         }
     }
-    Ok(removed)
+}
+
+/// Remove every regular file directly in `dir` last changed before `now - IMAGE_STALE_AFTER`;
+/// how many went. As the attachments sweep: a symlink or a directory is never followed or
+/// removed, and an entry it cannot read or remove does not stop the rest, the first such
+/// failure coming back at the end.
+fn sweep(dir: &Path, now: SystemTime) -> std::io::Result<usize> {
+    match now.checked_sub(IMAGE_STALE_AFTER) {
+        Some(cutoff) => sweep_token(dir, cutoff),
+        None => Ok(0),
+    }
 }
 
 fn not_drawn() -> OpError {
