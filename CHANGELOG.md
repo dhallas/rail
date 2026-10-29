@@ -6,6 +6,61 @@ All notable changes to Rail are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-29
+
+HTML mail with its styles and inline pictures, and Microsoft 365 folders that have subfolders,
+contributed by David Hallas (@dhallas) (#112, #113, #114, #115, #116).
+
+### Added
+
+- **Styled HTML mail.** The reader draws HTML mail's bold, headings, italics, quotes and links in
+  those styles. The text is still the text Rail stores and searches, so link markers, `g x`,
+  hyperlinks, search and quote folding work as before. `rich_html = false` under `[general]` or
+  `:rich-html` shows the plain text instead.
+- **Inline pictures.** The reader draws the pictures an HTML message carries itself (`cid:`), where
+  the message puts them and at the size it asks for. It uses the terminal's image protocol (kitty,
+  iTerm2 or sixel), or coloured half blocks elsewhere. `[image: …]` stands in until a picture
+  arrives, and for any past the first 32 in an open thread. Tracking pixels are left out, and
+  remote pictures are never fetched. `images = false` under `[general]` or `:images` leaves them
+  out.
+- Rail keeps each attachment's Content-ID, and fetches a picture it draws into a private cache
+  (`cache/images/`, swept after a week). Only PNG, JPEG, GIF and WebP up to 5 MiB are drawn, and
+  only when the bytes match the declared type.
+
+### Changed
+
+- On Microsoft 365, `Enter` on a More folders row named after a system folder (such as `Inbox`
+  above `Inbox/Project`) opens that folder instead of unfolding the row. Space, ← and → still fold
+  it. Gmail label paths such as `Sent/2024` unfold as before (#112).
+- Rail asks the terminal once at start how it draws pictures, which can take up to 2 s on a
+  terminal that does not answer. It does not ask when `TERM` is unset, empty or `dumb`.
+
+### Fixed
+
+Found in review before release and fixed on the contributor's branches:
+
+- The command palette lists a system folder once when a Microsoft 365 subfolder sits under it
+  (#117).
+- `Enter` on a Gmail label path named like a system label unfolds it instead of opening the system
+  mailbox (#118).
+- The reader's cursor stays on its line when a message's styled view arrives (#119).
+- The styled view shows the note that Rail kept only the first 10 MiB of a long message (#120).
+- When Microsoft 365 refuses to list a message's attachments, Rail keeps the message's text and the
+  attachments it already had. Importing an Outlook draft in that state stops with an error instead
+  of dropping its attachments (#121).
+- A cached picture is no longer swept just after Rail hands it to the reader (#122).
+- One message with many large pictures can no longer exhaust the reader's memory (#123).
+- Start no longer stalls on a terminal that cannot answer the picture query (#124).
+
+### Upgrading
+
+- This version adds a database migration (Content-IDs). An older Rail refuses the upgraded store,
+  so going back to 0.3.x is not supported.
+- Mail stored before this version gains Content-IDs, and so its inline pictures, only when its body
+  is fetched again.
+- An older Rail also refuses a `config.toml` that contains `rich_html` or `images`; remove them
+  before going back.
+
 ## [0.3.0] - 2026-10-27
 
 Bulk selection, snooze, attachments and saved searches, contributed by @armangurkan (#100, #101,
