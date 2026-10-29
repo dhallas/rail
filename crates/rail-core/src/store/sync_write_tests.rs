@@ -534,7 +534,7 @@ fn a_failing_batch_changes_nothing() {
 }
 
 #[test]
-fn bodies_record_attachments_for_the_thread_rollup() {
+fn bodies_record_attachments_for_the_thread_rollup_and_an_unknown_list_keeps_them() {
     let mut store = store();
     store
         .apply(&upserts(vec![envelope("m1", "t1", DAY_MS)]), NOW)
@@ -570,6 +570,26 @@ fn bodies_record_attachments_for_the_thread_rollup() {
         )
         .unwrap();
     assert_eq!((has, fetched), (1, Some(NOW)));
+    // A list the provider could not give leaves the stored one as it is.
+    let unknown = Body {
+        text: "again".into(),
+        attachments_unknown: true,
+        ..Body::default()
+    };
+    let batch = Batch {
+        bodies: vec![("m1".into(), unknown)],
+        ..Batch::new(1)
+    };
+    store.apply(&batch, NOW).unwrap();
+    let kept: (i64, String) = store
+        .conn()
+        .query_row(
+            "SELECT count(*), (SELECT body_text FROM messages) FROM attachments",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(kept, (1, "again".into()));
 }
 
 /// Spec §4 step 5: any message inside the window keeps its thread, a search hit included.
