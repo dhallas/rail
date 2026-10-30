@@ -272,3 +272,32 @@ async fn capital_i_trusts_the_sender_for_good_and_again_stops_trusting_them() {
     let text = std::fs::read_to_string(f.paths.config_file()).unwrap();
     assert!(!text.contains("remote_images_from"), "{text}");
 }
+
+#[tokio::test]
+async fn capital_i_keeps_a_sender_added_to_the_file_while_rail_was_open() {
+    let (mut f, _dir) = with_a_remote_picture().await;
+    press(&mut f, KeyCode::Enter).await;
+    open_toms_card(&mut f).await;
+    let config = f.paths.config_file();
+    std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+    let by_hand = |list: &str| {
+        let text = format!("[general]\nremote_images_from = [{list}] # by hand\n");
+        std::fs::write(&config, text).unwrap();
+    };
+    by_hand(r#""ann@example.com""#);
+
+    press(&mut f, KeyCode::Char('I')).await;
+    let text = std::fs::read_to_string(f.paths.config_file()).unwrap();
+    assert!(
+        text.contains(r#"remote_images_from = ["ann@example.com", "tom@example.com"] # by hand"#),
+        "{text}"
+    );
+
+    by_hand(r#""ann@example.com", "Tom@Example.com", "bob@example.com""#);
+    press(&mut f, KeyCode::Char('I')).await;
+    let text = std::fs::read_to_string(f.paths.config_file()).unwrap();
+    assert!(
+        text.contains(r#"remote_images_from = ["ann@example.com", "bob@example.com"] # by hand"#),
+        "{text}"
+    );
+}
