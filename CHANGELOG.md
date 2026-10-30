@@ -6,6 +6,37 @@ All notable changes to Rail are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-30
+
+Remote pictures in HTML mail, loaded only when you ask, contributed by David Hallas (@dhallas)
+(#129).
+
+### Added
+
+- **Remote pictures.** The pictures an HTML message loads from the web are held back, because
+  fetching one tells its sender you opened the mail. A message that has them starts with
+  `Remote pictures are not shown; i loads them, I always for this sender.`
+  - `i` loads the open thread's remote pictures.
+  - `I` always loads them for the sender of the message under the cursor, saved as
+    `remote_images_from` under `[general]`, and `I` again stops that.
+  - `remote_images = true` under `[general]`, or `:remote-images`, loads them in every thread.
+- The daemon fetches remote pictures itself, never the terminal:
+  - only over `https`, from public addresses, with every redirect checked the same way;
+  - with no proxy, cookies or referrer;
+  - at most 5 MiB each, with the type read from the bytes;
+  - kept for a week in Rail's private image cache.
+
+### Security
+
+- Trusting a sender trusts any mail whose From line carries that address, and a From line can be
+  forged. The README says so; checking the provider's authentication results is #131.
+
+### Upgrading
+
+- An older Rail refuses a `config.toml` that contains `remote_images` or `remote_images_from`;
+  remove them before going back. No database migration: going back to 0.4.x is otherwise
+  supported.
+
 ## [0.4.1] - 2026-10-29
 
 ### Fixed

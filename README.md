@@ -104,7 +104,8 @@ up without ever seeing your secrets.
 - Reading mail in the terminal: a unified inbox and per-account and per-label lists over the local
   store, a sidebar of merged mailboxes and each account's folders as a folding tree, a reader that
   opens on the newest message with the older ones as cards, folded quotes and numbered
-  (clickable) links, filter as you type, a command palette, keys you can
+  (clickable) links, HTML mail drawn with its styles and pictures (remote pictures only when you
+  ask), filter as you type, a command palette, keys you can
   change in `config.toml`, and `o` to open a message's HTML in the browser. See
   [Reading mail](#reading-mail).
 - Archive, trash, star and mark read or unread, alone or as a selection, with undo, on Gmail and
@@ -121,8 +122,7 @@ up without ever seeing your secrets.
 **Coming**
 
 - Next: agent tools for drafts and sends, the last piece of mail work, governed by the per-account `ai_send` policy.
-- Later: search operators, layout options, inline images, display-quality HTML in the
-  terminal.
+- Later: search operators, layout options.
 
 **Pre-1.0 caveats.** Config keys, command output and the store's schema may change between
 releases. The store migrates forward on its own; there is no downgrade path. Rail is tested on
@@ -456,9 +456,13 @@ alt text shows `[image: …]` in its place, and `i` loads the open thread's remo
 loads them and remembers the sender of the message under the cursor, by address, so their mail
 shows its pictures from then on (`remote pictures from jira@example.com: always`, saved as
 `remote_images_from` under `[general]`); `I` on their mail again stops that
-(`…: ask first`). The daemon fetches them (never the terminal), only over `https` from public addresses,
-with no cookies or referrer, at most 5 MiB each, and keeps them for a week in Rail's private image
-cache. `remote_images = true` under `[general]` or `:remote-images` loads them in every thread.
+(`…: ask first`). Trusting a sender trusts any mail whose From line carries that address, and a
+From line can be forged, so trust only senders whose pictures you would not mind loading for a
+stranger. `i` loads every remote picture of the thread, a tracking pixel too when the mail does not
+declare its size. The daemon fetches them (never the terminal), only over `https` from public
+addresses, with no cookies or referrer, at most 5 MiB each, and keeps them for a week in Rail's
+private image cache. `remote_images = true` under `[general]` or `:remote-images` loads them in
+every thread.
 
 HTML mail is shown as Rail's own rendering of it, the same text Rail stores and searches, with
 its bold and headings bold, its italics italic, its quotes dimmed and its links underlined
@@ -1340,9 +1344,11 @@ send, or save or discard a draft. It never deletes mail permanently, except a Gm
 discard or send (a Microsoft 365 draft you discard goes to Deleted Items), and the daemon is the
 only process that talks to Gmail or Microsoft 365.
 
-Remote content in mail is loaded only by your browser, never by Rail, and only when you ask for
-it: `o` opens a message's HTML there, after you confirm once per session, and `g x` opens a link
-there, after you have seen its address. The reader shows text only.
+Remote content in mail is loaded only when you ask for it. `o` opens a message's HTML in your
+browser, after you confirm once per session, and `g x` opens a link there, after you have seen its
+address. The reader draws a message's remote pictures only after `i`, for a sender you trusted with
+`I`, or with `remote_images = true`; the daemon fetches them as described in
+[Reading mail](#reading-mail), and fetching one tells its sender you opened the mail.
 
 **Mail and AI agents.** Through MCP, mail content never reaches an agent today. Text from outside
 Rail (preset files, provider and system error messages) comes back to the agent marked as
@@ -1408,7 +1414,7 @@ running syncs carry on unchanged.
 | `rich_html` | `true` | The reader draws HTML mail's bold, italic, quoted and linked text in those styles. `false` shows the same text plain. `:rich-html` toggles it and saves it. |
 | `images` | `true` | With `rich_html`, the reader draws the pictures an HTML message carries inline, through the terminal's image protocol (kitty, iTerm2 or sixel) or as coloured half blocks elsewhere. Rail asks the terminal which it speaks as it starts, waiting up to 2 s for one that does not answer; with `TERM` unset, empty or `dumb` it does not ask and draws half blocks. `false` leaves them out. `:images` toggles it and saves it. |
 | `remote_images` | `false` | With `images`, the reader fetches every HTML message's remote pictures, which tells their senders you opened the mail. `false` holds them back until `i` loads one thread's. `:remote-images` toggles it and saves it. |
-| `remote_images_from` | `[]` | Senders, by address, whose remote pictures the reader always fetches, such as `["jira@example.com"]`. `I` on a message adds its sender or removes them, and saves the list. |
+| `remote_images_from` | `[]` | Senders, by address, whose remote pictures the reader always fetches, such as `["jira@example.com"]`. The match is the From line's address, which a forged message can carry too. `I` on a message adds its sender or removes them, and saves the list. |
 
 ### `[[saved_searches]]`
 
