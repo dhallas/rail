@@ -6,6 +6,15 @@ All notable changes to Rail are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-30
+
+### Fixed
+
+- `I` in the reader adds or removes only that sender in `remote_images_from` as `config.toml` has
+  it, so a sender added by another Rail window or by hand is no longer lost. The list's other
+  entries, their formatting and a trailing comment stay. A running Rail still picks up senders
+  added elsewhere only when it restarts. Contributed by David Hallas (@dhallas) (#133, #136).
+
 ## [0.5.0] - 2026-10-30
 
 Remote pictures in HTML mail, loaded only when you ask, contributed by David Hallas (@dhallas)
