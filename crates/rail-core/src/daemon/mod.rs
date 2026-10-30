@@ -9,6 +9,7 @@ pub mod context;
 mod handlers;
 mod pending;
 mod registry;
+mod remote_fetch;
 pub mod server;
 mod version;
 pub mod wire;
@@ -52,6 +53,10 @@ mod m365_tests;
 #[cfg(test)]
 mod manage_tests;
 #[cfg(test)]
+mod remote_fetch_tests;
+#[cfg(test)]
+mod remote_image_tests;
+#[cfg(test)]
 mod saved_tests;
 #[cfg(test)]
 mod snooze_tests;
@@ -68,5 +73,6 @@ pub use connect::{
 #[cfg(any(test, feature = "test-gates"))]
 pub use context::{BeginGate, SaveGate};
 pub use context::{DaemonContext, Opener};
+pub use remote_fetch::RemoteFetch;
 pub use server::{IDLE_TIMEOUT, SAVE_GRACE, ServeConfig, Server, peer_allowed};
 pub use wire::{MAX_FRAME_BYTES, PROTOCOL_VERSION};

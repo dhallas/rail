@@ -12,7 +12,7 @@ use rail_core::provider::html::Style;
 use rail_core::store::view::{BodyState, MessageView, ThreadDetail};
 
 use super::ReaderAccount;
-use super::pictures::Pictures;
+use super::pictures::{Pictures, trusts};
 use super::rich::{self, Placing, RichBody};
 use crate::tui::clock::Clock;
 use crate::tui::screens::mail::Glyphs;
@@ -194,9 +194,12 @@ pub(super) struct State<'a> {
     pub read_error: Option<&'a str>,
     /// In rich mode, the HTML bodies read so far by message id; `None` in plain mode.
     pub rich: Option<&'a HashMap<i64, Rc<RichBody>>>,
-    /// With images on, the pictures read so far by (message id, Content-ID) and the terminal
+    /// With images on, the pictures read so far by (message id, source) and the terminal
     /// cell's size in pixels; `None` with images off.
     pub pictures: Option<(&'a Pictures, (u16, u16))>,
+    /// While the thread's remote pictures are held back: the hint, and the senders whose
+    /// messages need none.
+    pub remote_held: Option<(&'a str, &'a HashSet<String>)>,
 }
 
 fn line(kind: LineKind, text: String, tone: Tone) -> ReaderLine {
@@ -316,6 +319,10 @@ fn body(out: &mut Vec<ReaderLine>, index: usize, m: &MessageView, state: &State<
                         states,
                         font,
                         message_id: m.id,
+                        remote_hint: state
+                            .remote_held
+                            .filter(|(_, trusted)| !trusts(trusted, m))
+                            .map(|(hint, _)| hint),
                     });
                     rich::lines(out, index, body, state.unfolded, width, placing.as_ref());
                     body.cut

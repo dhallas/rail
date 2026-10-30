@@ -16,6 +16,7 @@ pub mod guide;
 pub mod op;
 pub mod pending;
 pub mod presets;
+pub mod remote_image;
 pub mod saved;
 pub mod secrets;
 pub mod snooze;
@@ -84,6 +85,7 @@ pub use presets::{
     PresetFetchRequest, PresetFetchResponse, PresetListing, PresetSummary, PresetsListRequest,
     PresetsListResponse,
 };
+pub use remote_image::{MAX_REMOTE_URL_BYTES, RemoteImageRequest, RemoteImageResponse};
 pub use saved::{SavedSearchListResponse, SavedSearchPutRequest, SavedSearchRemoveRequest};
 pub use secrets::{SecretsConfigureRequest, SecretsConfigureResponse};
 pub use snooze::{

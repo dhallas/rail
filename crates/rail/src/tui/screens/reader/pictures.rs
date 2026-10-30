@@ -1,25 +1,29 @@
-//! Inline pictures in rich mode: the `cid:` images of an HTML body, each fetched by the daemon
-//! (`attachment.image`), decoded here off the UI thread under memory limits, and sized as a
-//! browser would draw it: the size the mail declares (or the picture's own), at
-//! `CSS_PX_PER_COL` CSS pixels to a column, rows from the terminal cell's shape, shrunk to the
-//! pane and `MAX_PICTURE_ROWS`. A picture of `MAX_HIDDEN_PX` or less on a side is a tracking
-//! pixel or a spacer and takes no room. Only `cid:` pictures: remote ones wait for stage 3.
+//! Pictures in rich mode: the images of an HTML body, each fetched by the daemon (a `cid:` one
+//! with `attachment.image`, an `https:` one with `image.remote`), decoded here off the UI
+//! thread under memory limits, and sized as a browser would draw it: the size the mail
+//! declares (or the picture's own), at `CSS_PX_PER_COL` CSS pixels to a column, rows from the
+//! terminal cell's shape, shrunk to the pane and `MAX_PICTURE_ROWS`. A picture of
+//! `MAX_HIDDEN_PX` or less on a side is a tracking pixel or a spacer and takes no room.
+//! Fetching a remote picture tells its sender the mail was read, so a message's remote
+//! pictures are asked for only once they are loaded: `remote_images`, the key for this thread,
+//! or a sender in `remote_images_from`.
 //! A reader asks for at most `MAX_PICTURES_PER_READER`, `MAX_PICTURES_IN_FLIGHT` at a time,
 //! and keeps each shrunk to `MAX_KEPT_PIXELS`, so one mail cannot fill memory.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::rc::Rc;
 
 use image::{DynamicImage, ImageReader, Limits};
 use rail_core::provider::html::Image;
-use rail_core::store::view::BodyState;
+use rail_core::store::view::{BodyState, MessageView};
 use ratatui::layout::Size;
 use ratatui_image::picker::Picker;
 use ratatui_image::sliced::SlicedProtocol;
 use ratatui_image::{FilterType, Resize};
 
 use super::Reader;
+use super::rich::RichBody;
 
 /// CSS pixels to one terminal column, as a mail client's reading pane draws them.
 const CSS_PX_PER_COL: f64 = 8.0;
@@ -40,12 +44,32 @@ pub const MAX_PICTURES_PER_READER: usize = 32;
 pub const MAX_PICTURES_IN_FLIGHT: usize = 4;
 /// The longest Content-ID, as the store keeps it.
 const MAX_CONTENT_ID_BYTES: usize = 255;
+/// The longest remote address the daemon fetches.
+const MAX_REMOTE_URL_BYTES: usize = rail_core::ops::MAX_REMOTE_URL_BYTES;
 
-/// One `cid:` picture of a body: before run `at`, the part whose Content-ID is `content_id`.
+/// Where a picture comes from: the message's own part with this Content-ID, or this `https:`
+/// address.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub enum Source {
+    Inline(String),
+    Remote(String),
+}
+
+/// The kind only: a Content-ID or an address is the sender's text.
+impl std::fmt::Debug for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Inline(_) => "Inline",
+            Self::Remote(_) => "Remote",
+        })
+    }
+}
+
+/// One picture of a body: before run `at`, from `source`.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Inline {
     pub at: usize,
-    pub content_id: String,
+    pub source: Source,
     /// Outside text, as the scanner cleaned it.
     pub alt: String,
     pub width: Option<u32>,
@@ -67,7 +91,7 @@ pub enum Picture {
     Failed,
 }
 
-/// The `cid:` pictures among `images`, tiny declared ones left out.
+/// The `cid:` and `https:` pictures among `images`, tiny declared ones left out.
 pub fn inline(images: Vec<Image>) -> Vec<Inline> {
     images
         .into_iter()
@@ -76,8 +100,12 @@ pub fn inline(images: Vec<Image>) -> Vec<Inline> {
             !tiny(image.width) && !tiny(image.height)
         })
         .filter_map(|image| {
+            let source = match content_id(&image.src) {
+                Some(id) => Source::Inline(id),
+                None => Source::Remote(remote(&image.src)?),
+            };
             Some(Inline {
-                content_id: content_id(&image.src)?,
+                source,
                 at: image.at,
                 alt: image.alt,
                 width: image.width,
@@ -117,6 +145,26 @@ pub fn content_id(src: &str) -> Option<String> {
         && out.len() <= MAX_CONTENT_ID_BYTES
         && out.iter().all(u8::is_ascii_graphic);
     kept.then(|| String::from_utf8_lossy(&out).into_owned())
+}
+
+/// An `https:` address, trimmed, short enough for the daemon to take; `None` for any other.
+/// Plain `http:` is never fetched, so it stays its placeholder.
+fn remote(src: &str) -> Option<String> {
+    let src = src.trim();
+    let https = src
+        .get(..8)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("https://"));
+    (https && src.len() > 8 && src.len() <= MAX_REMOTE_URL_BYTES).then(|| src.to_string())
+}
+
+/// `m`'s first sender's address, in lower case.
+fn sender(m: &MessageView) -> Option<String> {
+    m.from.first().map(|p| p.address.to_lowercase())
+}
+
+/// `m`'s sender is one whose remote pictures are always fetched.
+pub(super) fn trusts(trusted: &HashSet<String>, m: &MessageView) -> bool {
+    sender(m).is_some_and(|address| trusted.contains(&address))
 }
 
 /// The picture at `path` decoded, within `MAX_DECODED_SIDE` and `MAX_DECODE_ALLOC`, and
@@ -182,12 +230,15 @@ pub fn fit(
     Some((cells(cols), cells(rows)))
 }
 
-/// The pictures asked for or read, by (message id, Content-ID).
-pub type Pictures = HashMap<(i64, String), Picture>;
+/// The pictures asked for or read, by (message id, source).
+pub type Pictures = HashMap<(i64, Source), Picture>;
 
-/// Each picture encoded for the size it was last drawn at, by (message id, Content-ID): one
-/// entry a picture, replaced when the size changes.
-pub(super) type Protocols = HashMap<(i64, String), ((u16, u16), Rc<SlicedProtocol>)>;
+/// Each picture encoded for the size it was last drawn at, by (message id, source): one entry
+/// a picture, replaced when the size changes.
+pub(super) type Protocols = HashMap<(i64, Source), ((u16, u16), Rc<SlicedProtocol>)>;
+
+/// A picture to ask the daemon for: (message id, its provider id, source).
+pub type Wanted = (i64, String, Source);
 
 impl Reader {
     /// The reader with pictures drawn by `picker`, or none (`None`: images off).
@@ -203,6 +254,42 @@ impl Reader {
         self.changed();
     }
 
+    /// Remote pictures fetched for this thread from the start (`remote_images`) or not, the
+    /// senders whose are always fetched (lower case), and the hint while they are not.
+    pub fn with_remote(mut self, loaded: bool, trusted: HashSet<String>, hint: String) -> Self {
+        self.remote = loaded;
+        self.trusted = trusted;
+        self.remote_hint = hint;
+        self
+    }
+
+    /// The senders whose remote pictures are always fetched, from now on.
+    pub fn set_trusted(&mut self, trusted: HashSet<String>) {
+        self.trusted = trusted;
+        self.changed();
+    }
+
+    /// The cursor message's sender, in lower case.
+    pub fn sender_at_cursor(&self) -> Option<String> {
+        self.message_at_cursor().and_then(sender)
+    }
+
+    /// `:remote-images` flipped: from now on, this thread's remote pictures fetched or not.
+    pub fn set_remote(&mut self, loaded: bool) {
+        self.remote = loaded;
+        self.changed();
+    }
+
+    /// The key: this thread's remote pictures fetched from now on. False when they already
+    /// were, so nothing changed.
+    pub fn load_remote(&mut self) -> bool {
+        if self.remote {
+            return false;
+        }
+        self.set_remote(true);
+        true
+    }
+
     /// What `lines::State::pictures` takes: in rich mode with images on, the pictures read so
     /// far and the cell's size.
     pub(super) fn placing(&self) -> Option<(&Pictures, (u16, u16))> {
@@ -211,10 +298,26 @@ impl Reader {
         Some((&self.pictures, (font.width, font.height)))
     }
 
-    /// The open messages' pictures not asked for yet, as (message id, its provider id,
-    /// Content-ID): as many as `MAX_PICTURES_IN_FLIGHT` and `MAX_PICTURES_PER_READER` leave
-    /// room for; none in plain mode or with images off.
-    pub fn pictures_wanted(&self) -> Vec<(i64, String, String)> {
+    /// While this thread has not loaded its remote pictures: the hint, and the senders whose
+    /// messages need none.
+    pub(super) fn held(&self) -> Option<(&str, &HashSet<String>)> {
+        (!self.remote).then_some((self.remote_hint.as_str(), &self.trusted))
+    }
+
+    /// Each open message whose body is read, with its HTML scanned.
+    fn open_bodies(&self) -> impl Iterator<Item = (&MessageView, &RichBody)> {
+        self.detail
+            .messages
+            .iter()
+            .zip(&self.expanded)
+            .filter(|(m, open)| **open && matches!(m.body, BodyState::Text { .. }))
+            .filter_map(|(m, _)| Some((m, self.rich_bodies.get(&m.id)?.as_ref())))
+    }
+
+    /// The open messages' pictures not asked for yet: as many as `MAX_PICTURES_IN_FLIGHT` and
+    /// `MAX_PICTURES_PER_READER` leave room for; none in plain mode or with images off, and no
+    /// remote one until the thread's remote pictures are loaded.
+    pub fn pictures_wanted(&self) -> Vec<Wanted> {
         if self.placing().is_none() {
             return Vec::new();
         }
@@ -230,20 +333,18 @@ impl Reader {
             .min(MAX_PICTURES_PER_READER.saturating_sub(self.pictures.len()));
         let mut wanted = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        for (m, open) in self.detail.messages.iter().zip(&self.expanded) {
-            let Some(body) = self.rich_bodies.get(&m.id) else {
-                continue;
-            };
-            if !*open || !matches!(m.body, BodyState::Text { .. }) {
-                continue;
-            }
+        for (m, body) in self.open_bodies() {
             for inline in &body.pictures {
                 if wanted.len() == room {
                     return wanted;
                 }
-                let key = (m.id, inline.content_id.clone());
+                let held = !self.remote && !trusts(&self.trusted, m);
+                if held && matches!(inline.source, Source::Remote(_)) {
+                    continue;
+                }
+                let key = (m.id, inline.source.clone());
                 if !self.pictures.contains_key(&key) && seen.insert(key) {
-                    wanted.push((m.id, m.remote_id.clone(), inline.content_id.clone()));
+                    wanted.push((m.id, m.remote_id.clone(), inline.source.clone()));
                 }
             }
         }
@@ -251,17 +352,17 @@ impl Reader {
     }
 
     /// `wanted` asked for: never asked again while the reader is open.
-    pub fn mark_pictures_asked(&mut self, wanted: &[(i64, String, String)]) {
-        for (id, _, content_id) in wanted {
+    pub fn mark_pictures_asked(&mut self, wanted: &[Wanted]) {
+        for (id, _, source) in wanted {
             self.pictures
-                .insert((*id, content_id.clone()), Picture::Loading);
+                .insert((*id, source.clone()), Picture::Loading);
         }
     }
 
     /// A picture read: drawn from now on, or (`None`) left as its placeholder.
-    pub fn picture_read(&mut self, id: i64, content_id: String, image: Option<DecodedPicture>) {
+    pub fn picture_read(&mut self, id: i64, source: Source, image: Option<DecodedPicture>) {
         let state = image.map_or(Picture::Failed, |image| Picture::Ready(Rc::new(image)));
-        self.pictures.insert((id, content_id), state);
+        self.pictures.insert((id, source), state);
         self.changed();
     }
 
@@ -277,7 +378,7 @@ impl Reader {
         let picker = self.picker.as_ref()?;
         let m = self.detail.messages.get(message)?;
         let inline = self.rich_bodies.get(&m.id)?.pictures.get(picture)?;
-        let key = (m.id, inline.content_id.clone());
+        let key = (m.id, inline.source.clone());
         if let Some((_, found)) = self
             .protocols
             .borrow()

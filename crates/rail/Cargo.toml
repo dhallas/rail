@@ -38,6 +38,7 @@ nucleo-matcher.workspace = true
 rustix.workspace = true
 thiserror.workspace = true
 shell-words.workspace = true
+toml_edit.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 # Already in the tree through crossterm; its safe `flag` API restores SIGHUP/SIGTERM's

@@ -94,7 +94,9 @@ impl DaemonHarness {
     ) -> Self {
         let (ctx, _) = daemon_context(&paths);
         let task = start_daemon(
-            configure(ctx).with_provider_factory(mock_factory(&mock)),
+            configure(ctx)
+                .with_provider_factory(mock_factory(&mock))
+                .with_remote_fetch(crate::daemon::RemoteFetch::loopback().unwrap()),
             ServeConfig::default(),
         )
         .await;

@@ -78,7 +78,12 @@ impl MailScreen {
                         let reader = reader
                             .with_unread(unread)
                             .with_rich(self.ctx.rich_html)
-                            .with_images(self.picker());
+                            .with_images(self.picker())
+                            .with_remote(
+                                self.ctx.remote_images,
+                                self.trusted_senders(),
+                                self.remote_hint(),
+                            );
                         self.reader = Some(reader);
                         // A read landing under an open composer leaves it the keys.
                         if self.compose.is_none() {
@@ -230,6 +235,7 @@ impl MailScreen {
             ReaderOutcome::Attachments => self.attachments(),
             ReaderOutcome::SaveAttachments => return self.save_cursor_attachments(),
             ReaderOutcome::OpenBrowser => return self.open_html(),
+            ReaderOutcome::TrustSender => return self.trust_sender(),
         }
         Vec::new()
     }
@@ -607,6 +613,7 @@ impl MailScreen {
             Target::SearchCounts => self.toggle_search_counts(),
             Target::RichHtml => self.toggle_rich_html(),
             Target::Images => self.toggle_images(),
+            Target::RemoteImages => self.toggle_remote_images(),
             Target::Scope(scope) => {
                 let mut effects = self.close_reader();
                 effects.extend(self.set_scope(scope));

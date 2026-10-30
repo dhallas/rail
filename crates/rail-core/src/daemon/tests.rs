@@ -47,6 +47,7 @@ fn the_registry_serves_exactly_the_implemented_operations() {
         names::DRAFT_SEND,
         names::GUIDE_PROVIDER,
         names::HELLO,
+        names::IMAGE_REMOTE,
         names::PENDING_CANCEL,
         names::PENDING_WAIT,
         names::PRESET_FETCH,

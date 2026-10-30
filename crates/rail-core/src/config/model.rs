@@ -87,9 +87,16 @@ pub struct General {
     /// `general.rich_html`: the reader draws an HTML body's bold, italic, quoted and linked
     /// text in their styles. `false` shows the plain text. `:rich-html` toggles it.
     pub rich_html: bool,
-    /// `general.images`: in rich mode the reader draws an HTML body's inline (`cid:`)
-    /// pictures. `false` leaves them out. `:images` toggles it.
+    /// `general.images`: in rich mode the reader draws an HTML body's pictures. `false`
+    /// leaves them out. `:images` toggles it.
     pub images: bool,
+    /// `general.remote_images`: the reader fetches every HTML body's remote pictures, which
+    /// tells their senders the mail was read. `false` (the default) holds them back until a
+    /// key loads one thread's. `:remote-images` toggles it.
+    pub remote_images: bool,
+    /// `general.remote_images_from`: the senders (addresses) whose remote pictures the reader
+    /// always fetches. `I` on a message adds its sender, or removes them.
+    pub remote_images_from: Vec<String>,
 }
 
 impl Default for General {
@@ -115,6 +122,8 @@ impl Default for General {
             saved_search_counts: true,
             rich_html: true,
             images: true,
+            remote_images: false,
+            remote_images_from: Vec::new(),
         }
     }
 }

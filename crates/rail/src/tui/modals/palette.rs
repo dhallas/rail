@@ -65,8 +65,10 @@ pub enum Target {
     SearchCounts,
     /// `:rich-html`: draw HTML bodies with their styles or as plain text.
     RichHtml,
-    /// `:images`: draw rich bodies' inline pictures or leave them out.
+    /// `:images`: draw rich bodies' pictures or leave them out.
     Images,
+    /// `:remote-images`: fetch remote pictures always, or only when a thread's are loaded.
+    RemoteImages,
 }
 
 /// One entry: what it shows (raw: label names are outside text), what it is matched by, and

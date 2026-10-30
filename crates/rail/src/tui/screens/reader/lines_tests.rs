@@ -60,6 +60,7 @@ impl Setup {
             read_error: self.read_error.as_deref(),
             rich: None,
             pictures: None,
+            remote_held: None,
         };
         cards::build(detail, &state, cols)
     }

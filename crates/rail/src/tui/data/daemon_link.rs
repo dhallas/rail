@@ -473,7 +473,7 @@ pub struct FakeDaemon {
     /// Numbers the token directories the default `attachment.open` answer writes, so two
     /// opens never share one.
     pub next_token: std::sync::atomic::AtomicI64,
-    /// `attachment.image` answers by Content-ID; not found for any other.
+    /// `attachment.image` answers by Content-ID, `image.remote` ones by address; else none.
     pub image_answers: std::sync::Mutex<
         std::collections::HashMap<String, Result<rail_core::ops::AttachmentImageResponse, OpError>>,
     >,
@@ -555,6 +555,7 @@ pub enum FakeCall {
         message_id: String,
         content_id: String,
     },
+    RemoteImage(String),
     SavedSearchPut {
         name: String,
         query: Option<String>,

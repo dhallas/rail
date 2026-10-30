@@ -61,6 +61,7 @@ fn every_operation_name_is_unique_and_matches_its_marker() {
         SavedSearchPut::NAME,
         SavedSearchRemove::NAME,
         AttachmentImage::NAME,
+        ImageRemote::NAME,
     ];
     assert_eq!(markers, names::ALL);
     for internal in [Hello::NAME, DaemonInfoOp::NAME, DaemonStop::NAME] {
@@ -100,6 +101,7 @@ fn every_request_and_response_has_an_object_schema() {
         object_schemas::<AttachmentSave>(),
         object_schemas::<AttachmentOpen>(),
         object_schemas::<AttachmentImage>(),
+        object_schemas::<ImageRemote>(),
     ];
     for (request, response) in all {
         assert_eq!(request["type"], "object", "{request}");

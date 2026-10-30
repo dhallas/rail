@@ -23,6 +23,8 @@ pub struct DaemonContext {
     /// Token requests and preset fetches: timeouts set, redirects off.
     pub http: reqwest::Client,
     pub opener: Opener,
+    /// Remote pictures for the reader: https from public addresses only.
+    pub(crate) remote: super::RemoteFetch,
     /// A token endpoint used instead of the provider's: a debug-build test hook, compiled out of
     /// release builds so nothing can redirect a real login.
     #[cfg(debug_assertions)]
@@ -114,6 +116,7 @@ impl DaemonContext {
             paths,
             http: http_client()?,
             opener,
+            remote: super::RemoteFetch::new()?,
             #[cfg(debug_assertions)]
             token_url: None,
             #[cfg(debug_assertions)]
@@ -203,6 +206,13 @@ impl DaemonContext {
         {
             None
         }
+    }
+
+    /// Fetch remote pictures with `remote` instead (tests: one that takes loopback).
+    #[cfg(any(test, feature = "test-gates"))]
+    pub fn with_remote_fetch(mut self, remote: super::RemoteFetch) -> Self {
+        self.remote = remote;
+        self
     }
 
     /// Build every account's provider with `factory` instead of Gmail's (tests).

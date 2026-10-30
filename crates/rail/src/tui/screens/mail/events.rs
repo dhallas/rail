@@ -84,9 +84,9 @@ impl MailScreen {
             MailEvent::RichHtml { message_id, result } => self.rich_read(message_id, result),
             MailEvent::Picture {
                 message_id,
-                content_id,
+                source,
                 image,
-            } => self.picture_read(message_id, content_id, image),
+            } => self.picture_read(message_id, source, image),
             event @ (MailEvent::AttachmentSaved { .. } | MailEvent::AttachmentOpened { .. }) => {
                 self.attachment_event(event)
             }
