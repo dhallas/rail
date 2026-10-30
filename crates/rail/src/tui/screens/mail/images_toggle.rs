@@ -60,7 +60,8 @@ impl MailScreen {
     }
 
     /// `I`: always load the cursor message's sender's remote pictures (fetching them now), or
-    /// stop, say so, and save `remote_images_from` (an empty list removes the key).
+    /// stop, say so, and add or remove just that address in `remote_images_from` as the file
+    /// has it, so a sender added elsewhere stays (an empty list removes the key).
     pub(super) fn trust_sender(&mut self) -> Vec<Effect> {
         let Some(address) = self.reader.as_ref().and_then(Reader::sender_at_cursor) else {
             return Vec::new();
@@ -77,7 +78,6 @@ impl MailScreen {
                 true
             }
         };
-        let value = (!list.is_empty()).then(|| list.clone());
         let senders = self.trusted_senders();
         if let Some(reader) = &mut self.reader {
             reader.set_trusted(senders);
@@ -87,7 +87,7 @@ impl MailScreen {
         let mut effects = self.flip_and_save(
             Some(notice),
             "remote_images_from",
-            Saved::List(value),
+            Saved::InList(address.clone(), trusted),
             |result| MailEvent::RemoteImagesSaved { result },
         );
         effects.extend(self.load_pictures());

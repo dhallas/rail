@@ -258,12 +258,13 @@ fn slot_name(n: u8) -> &'static str {
 }
 
 /// What is saved: `theme`, `time` and `thread_order` are text, `accent` a number, `hints` a
-/// boolean; `None` removes the key.
+/// boolean; `None` removes the key. `InList` adds (`true`) or removes one entry of a list as
+/// the file has it, so entries written elsewhere stay.
 pub(super) enum Saved {
     Text(Option<String>),
     Number(Option<i64>),
     Bool(Option<bool>),
-    List(Option<Vec<String>>),
+    InList(String, bool),
 }
 
 /// Read, edit and replace `config.toml` (an owner-only sibling, synced, then renamed) under the
@@ -284,12 +285,7 @@ pub(super) fn write_general(path: &Path, key: &str, value: Saved) -> Result<(), 
         Saved::Text(v) => set_general_text(&text, path, key, v.as_deref()),
         Saved::Number(v) => set_general_number(&text, path, key, v),
         Saved::Bool(v) => set_general_bool(&text, path, key, v),
-        Saved::List(v) => set_general(
-            &text,
-            path,
-            key,
-            v.map(|list| toml_edit::Value::Array(list.into_iter().collect())),
-        ),
+        Saved::InList(item, add) => set_general(&text, path, key, edited(&text, key, &item, add)),
     }
     .map_err(|e| e.to_string())?;
     if let Some(dir) = path
@@ -299,4 +295,21 @@ pub(super) fn write_general(path: &Path, key: &str, value: Saved) -> Result<(), 
         create_private_dir(dir).map_err(|e| e.to_string())?;
     }
     replace_private_atomic(path, out.as_bytes()).map_err(|e| e.to_string())
+}
+
+/// `[general] key`'s list in `text` with `item` added when missing or removed (matched in
+/// lower case), the other entries and their formatting kept; `None` once it is empty.
+fn edited(text: &str, key: &str, item: &str, add: bool) -> Option<toml_edit::Value> {
+    let doc = text.parse::<toml_edit::DocumentMut>().ok();
+    let mut list = doc
+        .as_ref()
+        .and_then(|d| d.get("general")?.get(key)?.as_array().cloned())
+        .unwrap_or_default();
+    let same = |v: &toml_edit::Value| v.as_str().is_some_and(|s| s.to_lowercase() == item);
+    if !add {
+        list.retain(|v| !same(v));
+    } else if !list.iter().any(same) {
+        list.push(item);
+    }
+    (!list.is_empty()).then(|| list.into())
 }
